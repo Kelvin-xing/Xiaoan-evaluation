@@ -154,6 +154,30 @@ exposed-unit utilization = supported context occurrences / exposed occurrences
 
 Evidence catalog 必須只包含當輪真正暴露給 composer 的 snapshot-bound units，且 ref、原文 span 和 hash 都要驗證。attribution 可支持「claim 與可見 context 一致」的判斷，但不是 token-level 因果證明，也不能取代人工校準。
 
+#### 5.4.1 一般 Judge 與 dedicated attribution judge
+
+Primary/secondary Judge 的 `faithfulness_claims` 是較粗粒度的忠實度檢查。每個 claim 回傳 `supported`、`evidence_refs` 和 `uncertainty`；validator 只允許 supported claim 引用本輪 `evidence_catalog` 中存在的 ref，並拒絕 unsupported claim 帶 ref。這能確認 Judge 有可追溯的證據指向，但不等於已完成精確語義 entailment。
+
+配置 `--attribution-judge-plugin` 時，才會啟用獨立的 dedicated attribution judge。它對每個 substantive claim（`FACTUAL`、`INTERPRETIVE`、`RECOMMENDATION`、`ACTION`）要求：回答精確 span、evidence ref、evidence 精確 span、layer、relation 和 uncertainty。validator 會逐字驗證 answer/evidence spans、snapshot-bound ref 和 occurrence；不合約的輸出標為 `UNAVAILABLE`，不補成 0。
+
+因此證據強度依次是：
+
+```text
+route/capsule ID       -> 系統選中了什麼
+resolved_refs          -> Ground resolver 解析了什麼
+evidence_catalog       -> Composer 本輪實際看到了什麼
+一般 Judge faithfulness -> Judge 認為 claim 是否有可引用證據
+dedicated attribution  -> claim 被哪個 layer 的哪個 span 以何種 relation 支持
+```
+
+#### 5.4.2 Capsule、Wiki、Ground 的分別
+
+- **Capsule**：要區分「被 router 選中」「被 composer 注入」和「claim 被歸因到 capsule unit」。只有最後一項可支持語義使用判斷。可報 `capsule claim alignment`、`capsule content coverage` 和 `exposed-unit utilization`；沒有可驗證 injected units 時為 `UNAVAILABLE`。
+- **Wiki**：在 evidence catalog 中以 `layer=WIKI` 出現，使用與其他 layer 相同的 `ENTAILS=1.0`、`PARTIAL=0.5` 支持權重，計算 Wiki layer support rate。
+- **Ground**：不是獨立 semantic layer。它提供 `ground_status`、`resolved_refs` 及實際暴露的 WIKI/SOURCE units；`ground_resolution` 是 resolver 操作健康度/hard gate，ref 數量不是回答忠實度。沒有可信 retrieval oracle 時，`ground_precision`/`ground_recall` 必須是 `SKIP` 或 `UNAVAILABLE`。
+
+若未配置 dedicated attribution judge，capsule/wiki/ground 的語義忠實度只能依賴一般 Judge 的 `faithfulness_claims` 與 evidence refs，結論強度較低，應在報告標明這個限制。
+
 ### 5.5 Performance、coverage 與 stability
 
 保留 first-character latency、total elapsed time、queue time、input/output/total tokens、cache telemetry、retry count 和 provider status。成本或速度改善必須分開報告，不能用 wall-clock 改善推論 token/API cost 下降；cache 只有在 provider 回傳 cache telemetry 時才可宣稱有效。
@@ -223,3 +247,26 @@ Baseline 必須是通過 schema/digest/`FINAL`/measurement contract 的正式 wo
 - provider failures、missing telemetry 和未執行 cases 仍保留正確狀態；
 - manifest、prompt、knowledge、rating rule 和 output logical digests 已更新，歷史 run 未被覆寫；
 - 正式交付物仍只有 `results.xlsx` 和 `report.md`，私有原始資料留在 ignored `runs/` 或 repo 外。
+
+## 10. 本評估能回答與不能回答的問題
+
+### 能回答
+
+- 在固定 case、deployment、model、prompt、knowledge 和 rating rule 下，回答的安全、品質維度和 red-line 表現如何？
+- 哪些 case/turn 的 route、safety、ground resolution、required claim、citation、faithfulness 或 output guard 未達 contract？
+- 一般 Judge 或 dedicated attribution judge 對哪些回答 claims 找到支持，支持來自 `CAPSULE`、`WIKI`、`SOURCE` 或其他可見 layer 的比例是多少？
+- 哪些 capsule units 被注入、哪些 occurrences 被使用，以及 answer claim 與 capsule/wiki/source 的可驗證語義支持程度如何？
+- 問題最早出現在哪個可觀測 stage：safety、router、resolver、composer、output guard、state/memory、transport/provider 或 judge？
+- 在控制條件相同且只改一個 registered lever 時，candidate 相對 baseline 是否改善 target metric，並守住 red-line、quality、latency 或其他 guardrails？
+- 同一 deployment/model/prompt/knowledge/case set 重跑時，route、answer、context 和 latency 是否穩定？
+
+### 不能回答
+
+- 不能由 route ID、capsule injection count 或 Ground `resolved_refs` 證明回答一定使用了該內容，更不能證明 token-level 或因果來源。
+- 不能在沒有 reviewed retrieval oracle、finite universe 或 citation oracle 時，可靠計算 Ground/retrieval precision、recall、F1、TN 或 citation recall；此時必須標示 `SKIP`/`UNAVAILABLE`。
+- 不能把一次 run 的相關性當成因果結論；沒有 controlled experiment，不能斷言某個 prompt、capsule 或 router 修改造成改善。
+- 不能把 provider/API failure、timeout、缺失 telemetry 或未執行 case 解讀為品質零分，也不能據此比較模型能力。
+- 不能用 overall average 取代 high-risk safety recall、red-line analysis、coverage 或 subgroup analysis。
+- 不能僅靠 Judge 分數證明法律內容在現實中一定正確、資源一定可用、使用者一定採納建議，或實際安全結果已改善。
+- 不能用 stability 證明回答正確；穩定地答錯仍然是錯。
+- 不能在不同 case contract、rating rule、judge prompt、model、deployment 或 knowledge snapshot 間直接排列分數，除非報告明確建立相容性與比較邊界。
