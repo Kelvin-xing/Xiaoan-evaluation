@@ -2,6 +2,8 @@
 
 這份文件是 `evaluation/` 與 `evaluation_multimodels/` 的共同使用指南，供評測執行者、模型／Prompt 開發者、人工 reviewer 和閱讀報告的同事使用。兩個目錄是可獨立安裝的 Python project；不要把 `runs/`、`.env`、provider 回應或私有 ledger 上傳到共享 repo。
 
+評分契約、metrics/index 公式、改進點定位和 Chatflow／prompt／capsule 修正流程，另見 repo 根目錄的 [`METHODOLOGY.md`](../METHODOLOGY.md)。
+
 ## 1. 兩個 project 的分工
 
 | 目錄 | 用途 | 主要入口 |
