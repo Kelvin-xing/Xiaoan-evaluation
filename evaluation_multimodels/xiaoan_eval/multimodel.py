@@ -1,0 +1,905 @@
+"""Provider-neutral 10x5 XiaoAn model/judge matrix runner.
+
+The module keeps provider transport separate from evaluation aggregation.  API
+credentials are read from environment variables and are never written to the
+public workbook.  Provider failures are retained as UNAVAILABLE observations.
+"""
+
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass, is_dataclass
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import threading
+import time
+from typing import Any, Callable, Mapping, Sequence
+
+from .rules import RatingRule
+
+try:
+    from openpyxl import Workbook
+except ImportError:  # pragma: no cover
+    Workbook = None
+
+
+PROVIDERS = ("claude", "gpt", "gemini", "qwen", "kimi")
+DEFAULT_MODEL_PAIRS = {
+    "claude": ("claude-opus-5", "claude-sonnet-5"),
+    "gpt": ("gpt-5.6-sol", "o4-mini-2025-04-16"),
+    "gemini": ("gemini-3-pro-preview-thinking", "gemini-3.8-flash"),
+    "qwen": ("qwen3.8-max", "qwen3.7-max"),
+    "kimi": ("kimi-k3", "kimi-k2.6"),
+}
+JUDGE_EVIDENCE_SCHEMA_VERSION = "judge-evidence/v1"
+MATRIX_JUDGE_REQUEST_SCHEMA_VERSION = "matrix-judge-request/v2"
+MATRIX_JUDGE_PROMPT_SCHEMA_VERSION = "matrix-judge-prompt/v1"
+JUDGE_CONTEXT_LAYERS = frozenset({"CAPSULE", "WIKI", "SOURCE"})
+
+
+class JudgeEvidenceError(ValueError):
+    """The compact projection cannot substantiate trace claims safely."""
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    provider: str
+    model: str
+    tier: str
+    reasoning_effort: str | None = None
+
+    @property
+    def id(self) -> str:
+        return f"{self.provider}:{self.model}:{self.tier}:{self.reasoning_effort or 'na'}"
+
+
+@dataclass(frozen=True)
+class ProviderResponse:
+    provider: str
+    model: str
+    status: str
+    text: str = ""
+    first_char: str = ""
+    elapsed_ms: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    request_id: str | None = None
+    error: str | None = None
+    trace: Mapping[str, Any] | None = None
+    cached_input_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    cache_hit_ratio: float | None = None
+    queue_ms: float = 0.0
+    error_type: str | None = None
+    attempt_count: int = 1
+    retry_errors: tuple[str, ...] = ()
+
+
+def _provider_response_from_mapping(value: Mapping[str, Any]) -> ProviderResponse:
+    """Restore JSON checkpoint data to the canonical response value types."""
+    data = dict(value)
+    retry_errors = data.get("retry_errors", ())
+    if not isinstance(retry_errors, Sequence) or isinstance(retry_errors, (str, bytes)):
+        raise ValueError("retry_errors must be an array")
+    data["retry_errors"] = tuple(str(error) for error in retry_errors)
+    return ProviderResponse(**data)
+
+
+def default_subject_specs() -> tuple[ModelSpec, ...]:
+    """Return the requested 10 subject rows; override model names via env vars."""
+    specs: list[ModelSpec] = []
+    for provider in PROVIDERS:
+        latest, second = DEFAULT_MODEL_PAIRS[provider]
+        latest = os.getenv(f"XIAOAN_{provider.upper()}_LATEST_MODEL", latest)
+        second = os.getenv(f"XIAOAN_{provider.upper()}_SECOND_MODEL", second)
+        specs.extend((ModelSpec(provider, latest, "latest", "medium"), ModelSpec(provider, second, "second", "high")))
+    return tuple(specs)
+
+
+def default_judge_specs() -> tuple[ModelSpec, ...]:
+    """Return one current judge per provider, aligned with the latest subject tier."""
+    return tuple(
+        ModelSpec(
+            provider,
+            os.getenv(
+                f"XIAOAN_{provider.upper()}_JUDGE_MODEL",
+                os.getenv(
+                    f"XIAOAN_{provider.upper()}_LATEST_MODEL",
+                    DEFAULT_MODEL_PAIRS[provider][0],
+                ),
+            ),
+            "judge",
+            "medium",
+        )
+        for provider in PROVIDERS
+    )
+
+
+def _usage(raw: Mapping[str, Any]) -> tuple[int | None, int | None, int | None]:
+    usage = raw.get("usage", raw.get("usageMetadata", {}))
+    if not isinstance(usage, Mapping):
+        return None, None, None
+    def number(*names: str) -> int | None:
+        for name in names:
+            value = usage.get(name)
+            if isinstance(value, int):
+                return value
+        return None
+    prompt = number("prompt_tokens", "input_tokens", "promptTokenCount")
+    completion = number("completion_tokens", "output_tokens", "candidatesTokenCount")
+    total = number("total_tokens", "totalTokenCount")
+    if total is None and prompt is not None and completion is not None:
+        total = prompt + completion
+    return prompt, completion, total
+
+
+def _cache_usage(raw: Mapping[str, Any], prompt_tokens: int | None) -> tuple[int | None, int | None, float | None]:
+    usage = raw.get("usage", raw.get("usageMetadata", {}))
+    if not isinstance(usage, Mapping):
+        return None, None, None
+    details = usage.get("input_tokens_details", usage.get("prompt_tokens_details", {}))
+    details = details if isinstance(details, Mapping) else {}
+    cached = details.get(
+        "cached_tokens",
+        usage.get("cache_read_input_tokens", usage.get("cachedContentTokenCount")),
+    )
+    cache_write = details.get(
+        "cache_write_tokens",
+        usage.get("cache_creation_input_tokens"),
+    )
+    cached = cached if isinstance(cached, int) and not isinstance(cached, bool) else None
+    cache_write = cache_write if isinstance(cache_write, int) and not isinstance(cache_write, bool) else None
+    ratio = cached / prompt_tokens if cached is not None and prompt_tokens else None
+    return cached, cache_write, ratio
+
+
+def normalize_response(provider: str, model: str, raw: Mapping[str, Any], elapsed_ms: float) -> ProviderResponse:
+    text = raw.get("text")
+    if not isinstance(text, str):
+        content = raw.get("content")
+        if isinstance(content, Sequence):
+            text = "".join(str(item.get("text", "")) for item in content if isinstance(item, Mapping))
+        choices = raw.get("choices")
+        if not isinstance(text, str) and isinstance(choices, Sequence) and choices and isinstance(choices[0], Mapping):
+            message = choices[0].get("message", choices[0])
+            text = message.get("content", "") if isinstance(message, Mapping) else ""
+        elif not isinstance(text, str):
+            candidates = raw.get("candidates")
+            text = (((candidates[0] or {}).get("content") or {}).get("parts") or [{}])[0].get("text", "") if candidates else ""
+    text = text if isinstance(text, str) else str(text or "")
+    prompt, completion, total = _usage(raw)
+    cached, cache_write, cache_ratio = _cache_usage(raw, prompt)
+    trace = raw.get("chatflow_debug")
+    return ProviderResponse(
+        provider=provider,
+        model=model,
+        status="PASS",
+        text=text,
+        first_char=text[:1],
+        elapsed_ms=elapsed_ms,
+        input_tokens=prompt,
+        output_tokens=completion,
+        total_tokens=total,
+        request_id=str(raw.get("id") or raw.get("responseId") or "") or None,
+        trace=dict(trace) if isinstance(trace, Mapping) else None,
+        cached_input_tokens=cached,
+        cache_write_tokens=cache_write,
+        cache_hit_ratio=cache_ratio,
+        attempt_count=int(raw.get("_xiaoan_attempt_count", 1) or 1),
+        retry_errors=tuple(str(item) for item in raw.get("_xiaoan_retry_errors", ()) or ()),
+    )
+
+
+def invoke(spec: ModelSpec, prompt: str, *, transport: Callable[[ModelSpec, str], Mapping[str, Any]] | None = None, queue_ms: float = 0.0) -> ProviderResponse:
+    started = time.perf_counter()
+    try:
+        if transport is None:
+            raise RuntimeError("no provider transport configured; pass a transport or use the provider plugin")
+        raw = transport(spec, prompt)
+        if not isinstance(raw, Mapping):
+            raise RuntimeError("provider response must be a JSON object")
+        response = normalize_response(spec.provider, spec.model, raw, (time.perf_counter() - started) * 1000)
+        response = ProviderResponse(**{**asdict(response), "queue_ms": queue_ms})
+        if not response.text.strip():
+            return ProviderResponse(**{**asdict(response), "status": "UNAVAILABLE", "error": "provider returned empty text", "error_type": "EMPTY_RESPONSE"})
+        return response
+    except Exception as exc:  # noqa: BLE001 - preserve operational state in matrix
+        text = f"{type(exc).__name__}: {exc}"
+        lowered = text.lower()
+        retry_errors = tuple(getattr(exc, "retry_errors", ()))
+        error_type = (
+            "RATE_LIMIT" if "429" in lowered
+            else "PROVIDER_5XX" if any(item in lowered for item in ("500", "502", "503", "504"))
+            else "TIMEOUT" if "timeout" in lowered or "timed out" in lowered
+            else "CONNECTION" if retry_errors or any(item in lowered for item in ("disconnect", "connection", "network", "urlerror"))
+            else "PROVIDER_ERROR"
+        )
+        return ProviderResponse(
+            spec.provider, spec.model, "UNAVAILABLE",
+            elapsed_ms=(time.perf_counter() - started) * 1000,
+            error=text, queue_ms=queue_ms, error_type=error_type,
+            attempt_count=int(getattr(exc, "attempt_count", 1)),
+            retry_errors=retry_errors,
+        )
+
+
+def weighted_score(scores: Mapping[str, Any], rule: RatingRule) -> float | None:
+    values: list[tuple[float, float]] = []
+    for module in rule.modules:
+        value = scores.get(module.name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            values.append((float(value), float(module.weight)))
+    if not values or sum(weight for _, weight in values) <= 0:
+        return None
+    return sum(score * weight for score, weight in values) / sum(weight for _, weight in values)
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    """Read a field from legacy mappings and the typed case dataclasses."""
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _json_value(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if isinstance(value, Mapping):
+        return dict(value)
+    return value
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _selected_fields(value: Any, names: Sequence[str]) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {name: value[name] for name in names if name in value}
+
+
+def _composer_invocation(trace: Mapping[str, Any]) -> Mapping[str, Any]:
+    snapshot = trace.get("effective_context_snapshot")
+    if not isinstance(snapshot, Mapping):
+        return {}
+    invocations = snapshot.get("invocations")
+    if isinstance(invocations, Mapping) and isinstance(invocations.get("composer"), Mapping):
+        return invocations["composer"]
+    composer = snapshot.get("composer")
+    return composer if isinstance(composer, Mapping) else {}
+
+
+def _compact_context_units(trace: Mapping[str, Any]) -> list[dict[str, Any]]:
+    invocation = _composer_invocation(trace)
+    raw_units = invocation.get("context_units", invocation.get("units", ()))
+    if not isinstance(raw_units, Sequence) or isinstance(raw_units, (str, bytes)):
+        return []
+    units: list[dict[str, Any]] = []
+    for raw in raw_units:
+        if not isinstance(raw, Mapping):
+            continue
+        layer = str(raw.get("layer", ""))
+        field_path = str(raw.get("field_path", raw.get("unit_id", "")))
+        keep_safety_prompt = layer == "PROMPT" and field_path == "safety_message"
+        if layer not in JUDGE_CONTEXT_LAYERS and not keep_safety_prompt:
+            continue
+        if raw.get("inclusion_state", "EXPOSED") != "EXPOSED":
+            continue
+        unit = _selected_fields(
+            raw,
+            (
+                "ref", "layer", "entity_id", "field_path", "item_id", "content",
+                "content_hash", "content_sha256", "parent_ref", "policy_ids",
+            ),
+        )
+        units.append(unit)
+    return units
+
+
+def _normalized_ground_ref(value: Any) -> str:
+    ref = str(value or "")
+    if ref.startswith("composer:"):
+        ref = ref[len("composer:"):]
+    if ref.startswith("knowledge/wiki/nodes/"):
+        ref = ref[len("knowledge/wiki/nodes/"):]
+    return ref
+
+
+def _ground_item_refs(item: Mapping[str, Any]) -> set[str]:
+    content = item.get("content")
+    semantic_text = item.get("text")
+    if isinstance(content, Mapping):
+        semantic_text = content.get("text", content.get("content"))
+    elif isinstance(content, str):
+        semantic_text = content
+    if not isinstance(semantic_text, str) or not semantic_text.strip():
+        return set()
+    refs = {
+        _normalized_ground_ref(item.get("ref")),
+        _normalized_ground_ref(item.get("entity_id")),
+    }
+    if isinstance(content, Mapping):
+        refs.add(_normalized_ground_ref(content.get("ref")))
+    return {ref for ref in refs if ref}
+
+
+def build_judge_evidence(trace: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Project a full Chatflow trace into small, semantic Judge evidence.
+
+    This is deliberately an allowlist. Provider requests, router candidate
+    catalogs, prompts, retries, timings, token counts, and response IDs remain
+    in the private checkpoint but never reach a Judge.
+    """
+    if trace is None:
+        return {
+            "schema_version": JUDGE_EVIDENCE_SCHEMA_VERSION,
+            "trace_sha256": None,
+            "trace_status": "ABSENT",
+            "route": {},
+            "safety": {},
+            "capsule": {},
+            "ground": {},
+            "state": {},
+            "output_guard": {},
+            "context": {"snapshot_id": None, "context_kind": None, "status": "ABSENT", "units": []},
+            "evidence_integrity": {"status": "NOT_APPLICABLE", "unresolved_refs": []},
+        }
+    if not isinstance(trace, Mapping):
+        raise JudgeEvidenceError("chatflow trace must be a mapping")
+
+    snapshot = trace.get("effective_context_snapshot")
+    snapshot = snapshot if isinstance(snapshot, Mapping) else {}
+    invocation = _composer_invocation(trace)
+    units = _compact_context_units(trace)
+    ground_units = [unit for unit in units if str(unit.get("layer")) in {"WIKI", "SOURCE"}]
+    ground = trace.get("ground")
+    ground = ground if isinstance(ground, Mapping) else {}
+    raw_refs = ground.get("resolved_ground", ground.get("resolved_refs", ()))
+    if isinstance(raw_refs, (str, bytes)):
+        if raw_refs:
+            raise JudgeEvidenceError("resolved ground refs must be an array")
+        resolved_refs = []
+    elif isinstance(raw_refs, Sequence):
+        resolved_refs = [str(item) for item in raw_refs]
+    else:
+        raise JudgeEvidenceError("resolved ground refs must be an array")
+    raw_items = ground.get("resolved_items", ())
+    resolved_items = (
+        [dict(item) for item in raw_items if isinstance(item, Mapping)]
+        if isinstance(raw_items, Sequence) and not isinstance(raw_items, (str, bytes))
+        else []
+    )
+    evidence_items = ground_units or resolved_items
+    available_refs = set().union(
+        *(_ground_item_refs(item) for item in evidence_items),
+        set(),
+    )
+    unresolved = [ref for ref in resolved_refs if _normalized_ground_ref(ref) not in available_refs]
+    if unresolved:
+        raise JudgeEvidenceError("unresolved ground refs: " + ", ".join(unresolved))
+
+    return {
+        "schema_version": JUDGE_EVIDENCE_SCHEMA_VERSION,
+        "trace_sha256": "sha256:" + hashlib.sha256(_canonical_json(trace).encode("utf-8")).hexdigest(),
+        "trace_status": "AVAILABLE",
+        "route": _selected_fields(
+            trace.get("route"),
+            ("capsule_id", "capsule_title", "confidence", "method", "reason", "fallback_reason", "should_continue_active_capsule"),
+        ),
+        "safety": _selected_fields(trace.get("safety"), ("level", "reason", "triggered_rules", "response_key")),
+        "capsule": _selected_fields(trace.get("capsule"), ("id", "version")),
+        "ground": {
+            **_selected_fields(ground, ("loaded", "policy_reason", "warnings")),
+            "resolved_refs": resolved_refs,
+            "evidence_items": [] if ground_units else resolved_items,
+        },
+        "state": _selected_fields(trace.get("state"), ("active_capsule_id", "ttl_turns")),
+        "output_guard": _selected_fields(trace.get("output_guard"), ("passed", "warnings")),
+        "context": {
+            "snapshot_id": snapshot.get("snapshot_id"),
+            "context_kind": snapshot.get("context_kind"),
+            "status": invocation.get("status", "ABSENT"),
+            "units": units,
+        },
+        "evidence_integrity": {"status": "COMPLETE", "unresolved_refs": []},
+    }
+
+
+def _answer_id(subject: ModelSpec, case_id: str, turn: int) -> str:
+    identity = _canonical_json({"subject_id": subject.id, "case_id": case_id, "turn": turn})
+    return "answer:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+
+
+def _judge_prompt(stable: Mapping[str, Any], dynamic: Mapping[str, Any]) -> str:
+    """Encode a provider-neutral stable-prefix/dynamic-suffix contract."""
+    digest = hashlib.sha256(_canonical_json(stable).encode("utf-8")).hexdigest()
+    return json.dumps({
+        "xiaoan_prompt_contract": MATRIX_JUDGE_PROMPT_SCHEMA_VERSION,
+        "prompt_cache_key": f"xiaoan-matrix-judge-v1:{digest[:16]}",
+        "stable_prefix": stable,
+        "dynamic_input": dynamic,
+    }, ensure_ascii=False, default=str)
+
+
+def _spec_id(value: Mapping[str, Any]) -> str:
+    if value.get("id"):
+        return str(value["id"])
+    return ModelSpec(
+        str(value.get("provider", "")),
+        str(value.get("model", "")),
+        str(value.get("tier", "")),
+        str(value["reasoning_effort"]) if value.get("reasoning_effort") else None,
+    ).id
+
+
+def _checkpoint_state(path: Path, contract_sha256: str, *, allow_legacy: bool) -> tuple[dict[str, dict[str, Any]], dict[tuple[str, str], dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
+    answers: dict[str, dict[str, Any]] = {}
+    judgements: dict[tuple[str, str], dict[str, Any]] = {}
+    cells: dict[tuple[str, str], dict[str, Any]] = {}
+    truncate_at: int | None = None
+    with path.open(encoding="utf-8") as source:
+        line_number = 0
+        while True:
+            offset = source.tell()
+            line = source.readline()
+            if not line:
+                break
+            line_number += 1
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                if not line.endswith("\n"):
+                    truncate_at = offset
+                    break
+                raise ValueError(f"invalid matrix checkpoint JSON at line {line_number}") from exc
+            if not isinstance(event, Mapping):
+                raise ValueError(f"invalid matrix checkpoint event at line {line_number}")
+            stored_contract = event.get("contract_sha256")
+            if stored_contract is None and not allow_legacy:
+                raise ValueError("legacy matrix checkpoint has no contract hash; migrate it or opt in explicitly")
+            if stored_contract is not None and stored_contract != contract_sha256:
+                raise ValueError("matrix checkpoint contract does not match cases, models, or rating rule")
+            event_type = event.get("event")
+            if event_type == "answer" and isinstance(event.get("answer"), Mapping):
+                subject = event.get("subject", {})
+                if not isinstance(subject, Mapping):
+                    continue
+                answer_id = str(event.get("answer_id") or _answer_id(
+                    ModelSpec(str(subject.get("provider", "")), str(subject.get("model", "")), str(subject.get("tier", "")), subject.get("reasoning_effort")),
+                    str(event.get("case_id", "")),
+                    int(event.get("turn", 0)),
+                ))
+                answers[answer_id] = {**dict(event), "answer_id": answer_id}
+            elif event_type == "judgement" and isinstance(event.get("judgement"), Mapping):
+                judge = event.get("judge", {})
+                subject = event.get("subject", {})
+                if not isinstance(judge, Mapping) or not isinstance(subject, Mapping):
+                    continue
+                answer_id = str(event.get("answer_id") or _answer_id(
+                    ModelSpec(str(subject.get("provider", "")), str(subject.get("model", "")), str(subject.get("tier", "")), subject.get("reasoning_effort")),
+                    str(event.get("case_id", "")),
+                    int(event.get("turn", 0)),
+                ))
+                judgements[(answer_id, _spec_id(judge))] = {**dict(event), "answer_id": answer_id}
+            elif event_type == "cell" and isinstance(event.get("row"), Mapping):
+                row = dict(event["row"])
+                subject = row.get("subject", {})
+                judge = row.get("judge", {})
+                if not isinstance(subject, Mapping) or not isinstance(judge, Mapping):
+                    continue
+                answer_id = str(row.get("answer_id") or _answer_id(
+                    ModelSpec(str(subject.get("provider", "")), str(subject.get("model", "")), str(subject.get("tier", "")), subject.get("reasoning_effort")),
+                    str(row.get("case_id", "")),
+                    int(row.get("turn", 0)),
+                ))
+                cells[(answer_id, _spec_id(judge))] = {**row, "answer_id": answer_id}
+    if truncate_at is not None:
+        with path.open("r+b") as target:
+            target.truncate(truncate_at)
+    return answers, judgements, cells
+
+
+def _resume_row(answer_event: Mapping[str, Any], judgement_event: Mapping[str, Any] | None, cell: Mapping[str, Any]) -> dict[str, Any]:
+    if isinstance(cell.get("answer"), Mapping) and isinstance(cell.get("judgement"), Mapping):
+        row = dict(cell)
+        row["answer"] = asdict(_provider_response_from_mapping(cell["answer"]))
+        row["judgement"] = asdict(_provider_response_from_mapping(cell["judgement"]))
+        return row
+    answer = asdict(_provider_response_from_mapping(answer_event["answer"]))
+    judged_data = dict(judgement_event["judgement"]) if judgement_event else {
+        "provider": cell.get("judge", {}).get("provider", ""),
+        "model": cell.get("judge", {}).get("model", ""),
+        "status": cell.get("judgement_status", "UNAVAILABLE"),
+        "error": cell.get("judgement_error"),
+        "error_type": cell.get("judgement_error_type"),
+    }
+    judged_data["status"] = cell.get("judgement_status", judged_data.get("status", "UNAVAILABLE"))
+    if cell.get("judgement_error") is not None:
+        judged_data["error"] = cell.get("judgement_error")
+    if cell.get("judgement_error_type") is not None:
+        judged_data["error_type"] = cell.get("judgement_error_type")
+    judged = asdict(_provider_response_from_mapping(judged_data))
+    return {
+        "answer_id": cell["answer_id"],
+        "case_id": cell.get("case_id"),
+        "turn": cell.get("turn"),
+        "subject": dict(cell.get("subject", {})),
+        "judge": dict(cell.get("judge", {})),
+        "answer": answer,
+        "judgement": judged,
+        "scores": dict(cell.get("scores", {})),
+        "weighted_score": cell.get("weighted_score"),
+        "status": cell.get("status", "UNAVAILABLE"),
+    }
+
+
+def _validated_scores(judged: ProviderResponse, rating_rule: RatingRule) -> tuple[ProviderResponse, dict[str, Any]]:
+    if judged.status != "PASS":
+        return judged, {}
+    try:
+        parsed = json.loads(judged.text)
+        if not isinstance(parsed, Mapping):
+            raise ValueError("judge response must be a JSON object")
+        dimensions = parsed.get("dimensions", parsed.get("scores", {}))
+        if isinstance(dimensions, Mapping):
+            scores = dict(dimensions)
+        elif isinstance(dimensions, Sequence) and not isinstance(dimensions, (str, bytes)):
+            scores = {
+                str(item.get("module")): item.get("score")
+                for item in dimensions
+                if isinstance(item, Mapping) and item.get("module") is not None
+            }
+        else:
+            scores = {}
+        expected_modules = {module.name for module in rating_rule.modules}
+        if set(scores) != expected_modules or any(
+            isinstance(value, bool) or not isinstance(value, int) or value not in {0, 1, 2, 3}
+            for value in scores.values()
+        ):
+            raise ValueError("judge dimensions must exactly match rating rule with integer scores 0-3")
+        return judged, scores
+    except (json.JSONDecodeError, ValueError):
+        return ProviderResponse(
+            provider=judged.provider,
+            model=judged.model,
+            status="UNAVAILABLE",
+            elapsed_ms=judged.elapsed_ms,
+            input_tokens=judged.input_tokens,
+            output_tokens=judged.output_tokens,
+            total_tokens=judged.total_tokens,
+            request_id=judged.request_id,
+            error="judge response was not valid JSON",
+            cached_input_tokens=judged.cached_input_tokens,
+            cache_write_tokens=judged.cache_write_tokens,
+            cache_hit_ratio=judged.cache_hit_ratio,
+            queue_ms=judged.queue_ms,
+            error_type="INVALID_JUDGE_JSON",
+            attempt_count=judged.attempt_count,
+            retry_errors=judged.retry_errors,
+        ), {}
+
+
+def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequence[ModelSpec], *, subject_transport: Callable[[ModelSpec, str], Mapping[str, Any]], judge_transport: Callable[[ModelSpec, str], Mapping[str, Any]], rating_rule: RatingRule, checkpoint_path: Path | None = None, resume: bool = False, allow_legacy_checkpoint: bool = False, subject_concurrency: int = 1, judge_concurrency: int = 1, max_in_flight: int | None = None, per_provider_concurrency: int = 1) -> list[dict[str, Any]]:
+    """Run the matrix while appending durable answer/judgement/cell checkpoints.
+
+    Checkpoints are JSONL events, intentionally separate from the public
+    workbook so an interrupted or provider-failed run can be audited or
+    rebuilt without exposing credentials.
+    """
+    if subject_concurrency < 1 or judge_concurrency < 1:
+        raise ValueError("subject_concurrency and judge_concurrency must be at least 1")
+    if max_in_flight is not None and max_in_flight < 1:
+        raise ValueError("max_in_flight must be at least 1")
+    if per_provider_concurrency < 1:
+        raise ValueError("per_provider_concurrency must be at least 1")
+    case_list = tuple(cases)
+    subject_list = tuple(subjects)
+    judge_list = tuple(judges)
+    for spec in (*subject_list, *judge_list):
+        if spec.provider not in PROVIDERS:
+            raise ValueError(f"provider must be one of {PROVIDERS} using canonical lowercase: {spec.provider}")
+    contract_sha256 = "sha256:" + hashlib.sha256(_canonical_json({
+        "judge_evidence_schema": JUDGE_EVIDENCE_SCHEMA_VERSION,
+        "judge_request_schema": MATRIX_JUDGE_REQUEST_SCHEMA_VERSION,
+        "judge_prompt_schema": MATRIX_JUDGE_PROMPT_SCHEMA_VERSION,
+        "cases": [_json_value(case) for case in case_list],
+        "subjects": [asdict(subject) for subject in subject_list],
+        "judges": [asdict(judge) for judge in judge_list],
+        "rating_rule": _json_value(rating_rule),
+    }).encode("utf-8")).hexdigest()
+    prior_answers: dict[str, dict[str, Any]] = {}
+    prior_judgements: dict[tuple[str, str], dict[str, Any]] = {}
+    prior_cells: dict[tuple[str, str], dict[str, Any]] = {}
+    checkpoint = None
+    if checkpoint_path is not None:
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            checkpoint = checkpoint_path.open("a" if resume else "x", encoding="utf-8")
+        except FileExistsError as exc:
+            raise ValueError(f"matrix checkpoint already exists; use a new output directory: {checkpoint_path}") from exc
+    if checkpoint is not None:
+        try:
+            fcntl.flock(checkpoint.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            checkpoint.close()
+            raise RuntimeError(f"matrix checkpoint is already locked by another process: {checkpoint_path}") from exc
+        if resume and checkpoint_path is not None and checkpoint_path.stat().st_size:
+            prior_answers, prior_judgements, prior_cells = _checkpoint_state(
+                checkpoint_path, contract_sha256, allow_legacy=allow_legacy_checkpoint,
+            )
+    if checkpoint_path is not None:
+        os.chmod(checkpoint_path, 0o600)
+
+    checkpoint_lock = threading.Lock()
+    global_gate = threading.BoundedSemaphore(max_in_flight or max(subject_concurrency, judge_concurrency))
+    provider_gates = {
+        provider: threading.BoundedSemaphore(per_provider_concurrency)
+        for provider in {spec.provider for spec in (*subject_list, *judge_list)}
+    }
+
+    def savepoint(event: Mapping[str, Any]) -> None:
+        if checkpoint is None:
+            return
+        payload = {"completed_at": time.time(), "contract_sha256": contract_sha256, **dict(event)}
+        with checkpoint_lock:
+            checkpoint.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+            checkpoint.flush()
+            os.fsync(checkpoint.fileno())
+
+    def limited_invoke(spec: ModelSpec, prompt: str, transport: Callable[[ModelSpec, str], Mapping[str, Any]]) -> ProviderResponse:
+        queued = time.perf_counter()
+        with provider_gates[spec.provider], global_gate:
+            queue_ms = (time.perf_counter() - queued) * 1000
+            return invoke(spec, prompt, transport=transport, queue_ms=queue_ms)
+
+    def run_lane(lane: tuple[int, int, ModelSpec, Any]) -> tuple[int, list[dict[str, Any]]]:
+        lane_index, _case_index, subject, case = lane
+        lane_rows: list[dict[str, Any]] = []
+        turns = tuple(_field(case, "turns", ()) or ())
+        case_id = str(_field(case, "id", ""))
+        lane_id = f"lane:{subject.id}:{case_id}"
+        start_case = getattr(subject_transport, "start_case", None)
+        start_error: str | None = None
+        answer_ids = [_answer_id(subject, case_id, int(_field(turn, "turn", 0))) for turn in turns]
+        completed_answers = [answer_id in prior_answers for answer_id in answer_ids]
+        if callable(start_case) and any(completed_answers) and not all(completed_answers):
+            raise ValueError(f"cannot safely resume partially completed stateful case {case_id} for {subject.id}")
+        if callable(start_case) and not all(completed_answers):
+            try:
+                with provider_gates[subject.provider], global_gate:
+                    start_case(subject, case_id)
+            except Exception as exc:  # preserve provider/runtime failures in output
+                start_error = f"{type(exc).__name__}: {exc}"
+        history: list[dict[str, str]] = []
+        try:
+            for turn in turns:
+                prompt = str(_field(turn, "user", ""))
+                turn_number = int(_field(turn, "turn", 0))
+                answer_id = _answer_id(subject, case_id, turn_number)
+                prior_answer = prior_answers.get(answer_id)
+                if prior_answer is not None:
+                    answer = _provider_response_from_mapping(prior_answer["answer"])
+                    answer_data = asdict(answer)
+                else:
+                    answer = ProviderResponse(subject.provider, subject.model, "UNAVAILABLE", error=start_error, error_type="START_CASE") if start_error else limited_invoke(subject, prompt, subject_transport)
+                    answer_data = asdict(answer)
+                    savepoint({"event": "answer", "task_id": f"{lane_id}:turn:{turn_number}", "answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": asdict(subject), "answer": answer_data})
+
+                judge_prompt: str | None = None
+                evidence_error: str | None = None
+                if answer.status == "PASS":
+                    try:
+                        judge_evidence = build_judge_evidence(answer.trace)
+                        stable_judge_request = {
+                            "schema_version": MATRIX_JUDGE_REQUEST_SCHEMA_VERSION,
+                            "instruction": "Return JSON only with a dimensions object. Score every supplied module exactly once using an integer 0, 1, 2, or 3 and only the supplied anchors.",
+                            "score_scale": [asdict(anchor) for anchor in rating_rule.score_scale],
+                            "modules": [asdict(module) for module in rating_rule.modules],
+                        }
+                        dynamic_judge_request = {
+                            "case_id": _field(case, "id"), "turn": _field(turn, "turn"),
+                            "user": prompt, "answer": answer.text, "history": list(history),
+                            "judge_evidence": judge_evidence,
+                            "expected": _json_value(_field(turn, "expected")),
+                        }
+                        judge_prompt = _judge_prompt(stable_judge_request, dynamic_judge_request)
+                    except JudgeEvidenceError as exc:
+                        evidence_error = f"JudgeEvidenceError: {exc}"
+                        savepoint({"event": "judge_evidence_error", "task_id": f"{lane_id}:turn:{turn_number}:evidence", "answer_id": answer_id, "case_id": case_id, "turn": turn_number, "error": evidence_error})
+
+                turn_rows: dict[int, dict[str, Any]] = {}
+
+                def record_judgement(index: int, judge: ModelSpec, judged: ProviderResponse, *, provider_called: bool) -> None:
+                    if provider_called:
+                        savepoint({"event": "judgement", "task_id": f"{lane_id}:turn:{turn_number}:judge:{judge.id}", "answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": asdict(subject), "judge": asdict(judge), "judgement": asdict(judged)})
+                    judged, scores = _validated_scores(judged, rating_rule)
+                    row = {
+                        "answer_id": answer_id, "case_id": case_id, "turn": turn_number,
+                        "subject": {**asdict(subject), "id": subject.id},
+                        "judge": {**asdict(judge), "id": judge.id},
+                        "answer": answer_data, "judgement": asdict(judged), "scores": scores,
+                        "weighted_score": weighted_score(scores, rating_rule),
+                        "status": "PASS" if answer.status == judged.status == "PASS" else "UNAVAILABLE",
+                    }
+                    turn_rows[index] = row
+                    savepoint({"event": "cell", "task_id": f"{lane_id}:turn:{turn_number}:cell:{judge.id}", "row": {"answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": row["subject"], "judge": row["judge"], "judgement_status": judged.status, "judgement_error": judged.error, "judgement_error_type": judged.error_type, "scores": row["scores"], "weighted_score": row["weighted_score"], "status": row["status"]}})
+
+                pending: list[tuple[int, ModelSpec]] = []
+                for index, judge in enumerate(judge_list):
+                    prior_cell = prior_cells.get((answer_id, judge.id))
+                    if prior_cell is not None:
+                        turn_rows[index] = _resume_row(prior_answer or prior_answers[answer_id], prior_judgements.get((answer_id, judge.id)), prior_cell)
+                        turn_rows[index]["answer"] = answer_data
+                    elif (answer_id, judge.id) in prior_judgements:
+                        prior_judged = _provider_response_from_mapping(prior_judgements[(answer_id, judge.id)]["judgement"])
+                        record_judgement(index, judge, prior_judged, provider_called=False)
+                    elif answer.status != "PASS":
+                        record_judgement(index, judge, ProviderResponse(judge.provider, judge.model, "UNAVAILABLE", error="subject response unavailable", error_type="SUBJECT_UNAVAILABLE"), provider_called=False)
+                    elif evidence_error is not None:
+                        record_judgement(index, judge, ProviderResponse(judge.provider, judge.model, "UNAVAILABLE", error=evidence_error, error_type="EVIDENCE_ERROR"), provider_called=False)
+                    else:
+                        pending.append((index, judge))
+
+                workers = min(judge_concurrency, len(pending))
+                if workers == 1:
+                    for index, judge in pending:
+                        record_judgement(index, judge, limited_invoke(judge, judge_prompt or "", judge_transport), provider_called=True)
+                elif workers > 1:
+                    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="xiaoan-judge") as executor:
+                        futures = {executor.submit(limited_invoke, judge, judge_prompt or "", judge_transport): (index, judge) for index, judge in pending}
+                        for future in as_completed(futures):
+                            index, judge = futures[future]
+                            record_judgement(index, judge, future.result(), provider_called=True)
+                lane_rows.extend(turn_rows[index] for index in range(len(judge_list)))
+                if answer.status == "PASS":
+                    history.append({"user": prompt, "assistant": answer.text})
+        finally:
+            end_case = getattr(subject_transport, "end_case", None)
+            if callable(end_case) and not all(completed_answers):
+                end_case(subject, case_id)
+        return lane_index, lane_rows
+
+    try:
+        lanes = [
+            (subject_index * len(case_list) + case_index, case_index, subject, case)
+            for subject_index, subject in enumerate(subject_list)
+            for case_index, case in enumerate(case_list)
+        ]
+        if subject_concurrency == 1:
+            completed = [run_lane(lane) for lane in lanes]
+        else:
+            with ThreadPoolExecutor(max_workers=subject_concurrency, thread_name_prefix="xiaoan-lane") as executor:
+                completed = list(executor.map(run_lane, lanes))
+        completed.sort(key=lambda item: item[0])
+        return [row for _, lane_rows in completed for row in lane_rows]
+    finally:
+        if checkpoint is not None:
+            checkpoint.close()
+
+
+def render_matrix_report(rows: Sequence[Mapping[str, Any]]) -> str:
+    subjects = sorted({str(row["subject"]["id"]) for row in rows})
+    judges = sorted({str(row["judge"]["id"]) for row in rows})
+    by_pair: dict[tuple[str, str], list[float]] = {}
+    for row in rows:
+        score = row.get("weighted_score")
+        if isinstance(score, (int, float)):
+            by_pair.setdefault((str(row["subject"]["id"]), str(row["judge"]["id"])), []).append(float(score))
+    lines = ["# Multimodel XiaoAn evaluation", "", "Weighted average score (0-3); UNAVAILABLE is excluded from denominators.", "", "| XiaoAn subject \\ Judge | " + " | ".join(judges) + " |", "| --- | " + " | ".join("---:" for _ in judges) + " |"]
+    for subject in subjects:
+        cells = []
+        for judge in judges:
+            values = by_pair.get((subject, judge), [])
+            cells.append(f"{sum(values)/len(values):.4f}" if values else "UNAVAILABLE")
+        lines.append("| " + subject + " | " + " | ".join(cells) + " |")
+    dimensions = sorted({str(name) for row in rows for name in row.get("scores", {})})
+    if dimensions:
+        lines.extend(["", "## Dimension averages by subject", "", "| Subject | " + " | ".join(dimensions) + " |", "| --- | " + " | ".join("---:" for _ in dimensions) + " |"])
+        for subject in subjects:
+            cells = []
+            for dimension in dimensions:
+                values = [row["scores"].get(dimension) for row in rows if row["subject"]["id"] == subject and isinstance(row.get("scores", {}).get(dimension), (int, float))]
+                cells.append(f"{sum(values)/len(values):.4f}" if values else "UNAVAILABLE")
+            lines.append("| " + subject + " | " + " | ".join(cells) + " |")
+        lines.extend(["", "## Dimension scores by subject and judge", "", "| Subject | Judge | " + " | ".join(dimensions) + " |", "| --- | --- | " + " | ".join("---:" for _ in dimensions) + " |"])
+        for subject in subjects:
+            for judge in judges:
+                cells = []
+                for dimension in dimensions:
+                    values = [row["scores"].get(dimension) for row in rows if row["subject"]["id"] == subject and row["judge"]["id"] == judge and isinstance(row.get("scores", {}).get(dimension), (int, float))]
+                    cells.append(f"{sum(values)/len(values):.4f}" if values else "UNAVAILABLE")
+                lines.append("| " + subject + " | " + judge + " | " + " | ".join(cells) + " |")
+    lines.extend(["", "## Operational telemetry", "", "| Subject | Judge | First char | Answer queue ms | Answer ms | Answer tokens | Answer attempts | Answer cached/write | Answer error | Judge queue ms | Judge ms | Judge tokens | Judge attempts | Judge cached/write | Cache hit ratio | Judge error | Status |", "| --- | --- | :---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"])
+    for row in rows:
+        answer, judge = row["answer"], row["judgement"]
+        lines.append(f"| {row['subject']['id']} | {row['judge']['id']} | {answer.get('first_char','')} | {answer.get('queue_ms','')} | {answer.get('elapsed_ms','')} | {answer.get('total_tokens','')} | {answer.get('attempt_count','')} | {answer.get('cached_input_tokens','')}/{answer.get('cache_write_tokens','')} | {answer.get('error_type','')} | {judge.get('queue_ms','')} | {judge.get('elapsed_ms','')} | {judge.get('total_tokens','')} | {judge.get('attempt_count','')} | {judge.get('cached_input_tokens','')}/{judge.get('cache_write_tokens','')} | {judge.get('cache_hit_ratio','')} | {judge.get('error_type','')} | {row.get('status')} |")
+    return "\n".join(lines) + "\n"
+
+
+def write_matrix_workbook(rows: Sequence[Mapping[str, Any]], path: Path) -> None:
+    """Write de-duplicated answers and answer-linked judgement facts."""
+    if Workbook is None:
+        raise RuntimeError("openpyxl is required to write matrix workbooks")
+    workbook = Workbook()
+    overview = workbook.active
+    overview.title = "Matrix"
+    subjects = sorted({str(row["subject"]["id"]) for row in rows})
+    judges = sorted({str(row["judge"]["id"]) for row in rows})
+    def append_text_safe(sheet: Any, values: Sequence[Any]) -> None:
+        sheet.append(list(values))
+        for cell in sheet[sheet.max_row]:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
+
+    append_text_safe(overview, ["XiaoAn subject \\ Judge", *judges])
+    for subject in subjects:
+        values = []
+        for judge in judges:
+            scores = [row["weighted_score"] for row in rows if row["subject"]["id"] == subject and row["judge"]["id"] == judge and isinstance(row.get("weighted_score"), (int, float))]
+            values.append(sum(scores) / len(scores) if scores else "UNAVAILABLE")
+        append_text_safe(overview, [subject, *values])
+    dimensions = sorted({str(name) for row in rows for name in row.get("scores", {})})
+    answers = workbook.create_sheet("All_Answers")
+    append_text_safe(answers, ["answer_id", "case_id", "turn", "subject_id", "status", "answer", "answer_first_char", "answer_queue_ms", "answer_elapsed_ms", "answer_input_tokens", "answer_output_tokens", "answer_total_tokens", "answer_attempt_count", "answer_retry_errors", "answer_cached_input_tokens", "answer_cache_write_tokens", "answer_cache_hit_ratio", "trace_sha256", "error_type", "error"])
+    unique_answers: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        unique_answers.setdefault(str(row["answer_id"]), row)
+    for answer_id, row in unique_answers.items():
+        answer = row["answer"]
+        trace = answer.get("trace")
+        trace_sha256 = (
+            "sha256:" + hashlib.sha256(_canonical_json(trace).encode("utf-8")).hexdigest()
+            if isinstance(trace, Mapping)
+            else ""
+        )
+        append_text_safe(answers, [answer_id, row.get("case_id"), row.get("turn"), row["subject"]["id"], answer.get("status"), answer.get("text", ""), answer.get("first_char", ""), answer.get("queue_ms"), answer.get("elapsed_ms"), answer.get("input_tokens"), answer.get("output_tokens"), answer.get("total_tokens"), answer.get("attempt_count"), json.dumps(answer.get("retry_errors", ()), ensure_ascii=False), answer.get("cached_input_tokens"), answer.get("cache_write_tokens"), answer.get("cache_hit_ratio"), trace_sha256, answer.get("error_type"), answer.get("error")])
+
+    judgements = workbook.create_sheet("All_Judgements")
+    append_text_safe(judgements, ["answer_id", "case_id", "turn", "subject_id", "judge_id", "status", "judge_text", "judge_queue_ms", "judge_elapsed_ms", "judge_input_tokens", "judge_output_tokens", "judge_total_tokens", "judge_attempt_count", "judge_retry_errors", "judge_cached_input_tokens", "judge_cache_write_tokens", "judge_cache_hit_ratio", *[f"dimension:{name}" for name in dimensions], "weighted_score", "error_type", "error"])
+    for row in rows:
+        judged = row["judgement"]
+        append_text_safe(judgements, [row["answer_id"], row.get("case_id"), row.get("turn"), row["subject"]["id"], row["judge"]["id"], row.get("status"), judged.get("text", ""), judged.get("queue_ms"), judged.get("elapsed_ms"), judged.get("input_tokens"), judged.get("output_tokens"), judged.get("total_tokens"), judged.get("attempt_count"), json.dumps(judged.get("retry_errors", ()), ensure_ascii=False), judged.get("cached_input_tokens"), judged.get("cache_write_tokens"), judged.get("cache_hit_ratio"), *[row.get("scores", {}).get(name, "UNAVAILABLE") for name in dimensions], row.get("weighted_score"), judged.get("error_type") or row["answer"].get("error_type"), judged.get("error") or row["answer"].get("error")])
+    dimension_sheet = workbook.create_sheet("Dimension_By_Judge")
+    append_text_safe(dimension_sheet, ["subject_id", "judge_id", *dimensions, "weighted_score_average", "available_count", "attempted_count"])
+    for subject in subjects:
+        for judge in judges:
+            matching = [row for row in rows if row["subject"]["id"] == subject and row["judge"]["id"] == judge]
+            cells = []
+            for dimension in dimensions:
+                values = [row["scores"].get(dimension) for row in matching if isinstance(row.get("scores", {}).get(dimension), (int, float))]
+                cells.append(sum(values) / len(values) if values else "UNAVAILABLE")
+            weighted = [row["weighted_score"] for row in matching if isinstance(row.get("weighted_score"), (int, float))]
+            append_text_safe(dimension_sheet, [subject, judge, *cells, sum(weighted) / len(weighted) if weighted else "UNAVAILABLE", len(weighted), len(matching)])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
+
+
+def write_pair_workbooks(rows: Sequence[Mapping[str, Any]], directory: Path) -> list[Path]:
+    """Write one auditable workbook for every subject/judge pair."""
+    grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for row in rows:
+        key = (str(row["subject"]["id"]), str(row["judge"]["id"]))
+        grouped.setdefault(key, []).append(row)
+    directory.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    for (subject, judge), pair_rows in sorted(grouped.items()):
+        safe_subject = re.sub(r"[^A-Za-z0-9._-]+", "_", subject).strip("._") or "subject"
+        safe_judge = re.sub(r"[^A-Za-z0-9._-]+", "_", judge).strip("._") or "judge"
+        path = directory / f"{safe_subject}__vs__{safe_judge}.xlsx"
+        write_matrix_workbook(pair_rows, path)
+        paths.append(path)
+    return paths

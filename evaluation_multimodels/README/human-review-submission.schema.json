@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xiaoan.local/schemas/human-review-submission-1.0.json",
+  "title": "XiaoAn Human Review Submission",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "review_id",
+    "run_fingerprint",
+    "case_id",
+    "turn",
+    "response_sha256",
+    "reviewer_id",
+    "submitted_at",
+    "red_lines",
+    "dimensions",
+    "confidence",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "review_id": {"type": "string", "minLength": 1},
+    "run_fingerprint": {"type": "string", "minLength": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "turn": {"type": "integer", "minimum": 1},
+    "response_sha256": {"type": "string", "minLength": 1},
+    "reviewer_id": {"type": "string", "minLength": 1},
+    "submitted_at": {"type": "string", "format": "date-time"},
+    "red_lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "triggered", "evidence_refs"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "triggered": {"type": "boolean"},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["module", "score", "supporting_evidence_refs", "deduction_reason"],
+        "properties": {
+          "module": {"type": "string", "minLength": 1},
+          "score": {"type": "integer", "enum": [0, 1, 2, 3]},
+          "supporting_evidence_refs": {"type": "array", "items": {"type": "string"}},
+          "deduction_reason": {"type": "string"}
+        }
+      }
+    },
+    "confidence": {"enum": ["low", "medium", "high"]},
+    "notes": {"type": "string"}
+  }
+}
