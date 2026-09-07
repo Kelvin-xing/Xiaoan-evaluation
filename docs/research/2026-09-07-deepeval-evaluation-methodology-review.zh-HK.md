@@ -1,6 +1,6 @@
 # DeepEval 閱讀研究：XiaoAn evaluation 與 multimodels 方法論深化建議
 
-日期：2026-09-07  
+日期：2026-09-07
 範圍：只閱讀下列 DeepEval 公開文章；本文件不使用 DeepEval API，也不建議把 DeepEval 加入 XiaoAn runtime。
 
 ## 摘要判斷
@@ -128,4 +128,3 @@ turn_measurement:
 ## 結論
 
 DeepEval 文章支持 XiaoAn 目前「trace-first、分層 metrics、human calibration、EDD」的方向，但不足以替代本專案的 domain safety contract。最重要的修正不是增加更多通用 metrics，而是：把 judge 從「可呼叫的評分器」提升為「有資格門檻的測量儀器」；把 multimodels 從「5×10 分數矩陣」提升為「公平、配對、可解釋、保留 unavailable 的比較實驗」；把 memory 與 critical safety 從平均品質分中拆出來。
-

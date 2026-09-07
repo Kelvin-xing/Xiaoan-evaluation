@@ -1,6 +1,6 @@
 # 多模型交叉評審方法論：既有對話與 XiaoAn 實作對照
 
-日期：2026-09-07  
+日期：2026-09-07
 範圍：Claude、Gemini、GPT、DeepSeek、Qwen 的 subject × judge 評估；不使用 DeepEval API。
 
 ## 來源與判讀
@@ -118,4 +118,3 @@ answer artifacts 給 judges；judge 失敗可重試而不重跑 subject。這也
 - 不讓模型 judge 自己產生或修改 oracle；oracle 必須由人工審核並有 provenance。
 - 不把 DeepEval SDK/API 引入 runtime；本筆記只採納可由現有 XiaoAn artifacts、schemas 與本地統計
   實作的測量原則。
-
