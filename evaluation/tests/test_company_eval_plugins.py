@@ -203,6 +203,23 @@ def test_primary_judge_defaults_to_documented_model(monkeypatch) -> None:
     assert captured["model"] == "gpt-5.5"
 
 
+def test_evaluation_env_falls_back_to_project_local_file(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "XIAOAN_JUDGE_MODEL=file-model\nOPENAI_API_KEY=file-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(company_eval_plugins, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(company_eval_plugins, "EVALUATION_ENV_PATH", env_file)
+    monkeypatch.setenv("XIAOAN_JUDGE_MODEL", "shell-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "shell-key")
+
+    values = company_eval_plugins._evaluation_env()
+
+    assert values["XIAOAN_JUDGE_MODEL"] == "file-model"
+    assert values["OPENAI_API_KEY"] == "shell-key"
+
+
 def test_recommendation_prompt_requests_chinese_user_visible_text() -> None:
     assert "繁體中文" in company_eval_plugins.RECOMMENDATION_INSTRUCTIONS
     assert "problem_statement" in company_eval_plugins.RECOMMENDATION_INSTRUCTIONS

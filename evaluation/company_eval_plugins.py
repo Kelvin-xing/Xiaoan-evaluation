@@ -13,6 +13,7 @@ from openai import OpenAI
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+EVALUATION_ENV_PATH = Path(__file__).resolve().parent / ".env"
 DEFAULT_JUDGE_MODEL = "gpt-5.5"
 MAX_CONTEXT_ITEMS = 12
 MAX_CONTEXT_CHARS_PER_ITEM = 12_000
@@ -42,6 +43,10 @@ class ProviderText(str):
         instance = super().__new__(cls, value)
         instance.usage = dict(usage or {})
         return instance
+
+
+def _is_model_setting(name: str) -> bool:
+    return name.startswith("XIAOAN_") and name.endswith(("_MODEL", "_MODELS"))
 
 
 def _usage_mapping(value: Any) -> dict[str, Any]:
@@ -339,16 +344,31 @@ def _local_chatflow_api_key() -> str | None:
 
 def _evaluation_env() -> dict[str, str]:
     poc_dir = REPO_ROOT / "tech" / "chatflow" / "poc"
-    sys.path.insert(0, str(poc_dir))
-    try:
-        from settings import load_evaluation_env
-
-        return load_evaluation_env()
-    finally:
+    if (poc_dir / "settings.py").exists():
+        sys.path.insert(0, str(poc_dir))
         try:
-            sys.path.remove(str(poc_dir))
-        except ValueError:
-            pass
+            from settings import load_evaluation_env
+
+            return load_evaluation_env()
+        finally:
+            try:
+                sys.path.remove(str(poc_dir))
+            except ValueError:
+                pass
+
+    values: dict[str, str] = {}
+    if EVALUATION_ENV_PATH.exists():
+        for raw in EVALUATION_ENV_PATH.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line and not line.startswith("#") and "=" in line:
+                name, value = line.split("=", 1)
+                values[name.strip()] = value.strip().strip('"').strip("'")
+    for key, value in os.environ.items():
+        if key in values and _is_model_setting(key):
+            continue
+        if key in values or key.startswith(("GLOBALAI_", "XIAOAN_", "OPENAI_")):
+            values[key] = value
+    return values
 
 
 def _evaluation_value(name: str, default: str) -> str:
