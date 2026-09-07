@@ -49,6 +49,16 @@ Case YAML 是 versioned contract，不是固定答案。`expected` 可以描述�
 
 Provider timeout、rate limit、connection error、empty response、judge unavailable、`UNAVAILABLE`、`ERROR` 和 `NOT_RUN` 都是 operational state，不是品質 0 分，也不能被悄悄從資料中刪除。品質平均只使用有可用 final score 的 observation；其他狀態另報 coverage 和 operation health。
 
+### 3.1 三層 measurement contract
+
+每個 case/turn 必須把結果分成三層，不能用單一總分代替：
+
+1. **Safety/operational gate**：red line、PII、unknown route、trace completeness、ground resolution、output guard 和 provider 狀態。
+2. **Task outcome**：approved oracle 的 safety/route、required claims、citation、tool、goal 與 memory checkpoint 是否達成。
+3. **Quality judgement**：七個 0–3 維度、atomic claims、faithfulness、表達與包容性。
+
+`Weighted_Total` 只屬於第三層的 rubric 摘要。報告必須同時展示 critical/high-risk recall、available denominator、coverage、operation failure 與品質平均，避免一般案例的高分掩蓋一個危機漏接。
+
 ## 4. 品質評分
 
 ### 4.1 Red line 優先
@@ -97,6 +107,34 @@ Weighted_Total = sum(score[m] * final_weight[m])
 `Weighted_Total` 範圍為 0–3。它是 rubric quality summary，不取代 red-line、coverage、latency 或 evidence metrics。
 
 ## 5. Metrics 與 index 定義
+
+### 5.0 絕對評分與成對比較
+
+`evaluation/` 的單 deployment run 與 `evaluation_multimodels/` 的 matrix 必須分開保存兩種測量：
+
+- **Absolute track**：同一 `ratings rule.yml`、approved oracle、evidence catalog 和 0–3 錨點，回答「是否達到要求」。
+- **Pairwise track**：同一 case/turn 的兩個回答以 blinded A/B 比較，回答「哪個版本較好」。A/B 的 `display_order` 必須隨機化；同一 pair 可用相反順序重跑以測 position bias。`winner` 只允許 `LEFT`、`RIGHT`、`TIE`、`INVALID`，不得未經協議把 tie 轉成半分。
+
+Pairwise 勝率不能回填成 absolute quality score，也不能用來抵銷 safety hard gate。模型或 prompt 的發布判斷先看 operational/safety gate，再看 absolute quality；pairwise 僅作相容版本的改善證據。
+
+每個 matrix cell 至少綁定 `case_id`、`turn`、`answer_id`、`subject_id`、`judge_id`、`display_order`、`prompt/rule/schema hash`、`control_digest`、`status` 和原始 rationale。`subject=judge` 的 self-judging cell 必須獨立報告，不直接混入主要排名。
+
+### 5.0.1 固定 controls 與先生成後評審
+
+跨模型比較必須先完成所有 subject answers，再從 immutable answer artifacts 執行 judges；judge 重試不得重跑 subject。`control_digest` 至少涵蓋 system/user/history、角色與截止日期、sampling/max output、工具、knowledge snapshot、case order、random seed、judge rubric/schema/prompt 及 A/B order policy。digest 不同時 baseline comparison 為 `NOT_COMPARABLE`。
+
+5×5 或 10×5 matrix 均須明確保存 subjects、judges、provider/model version、tier、self-judging policy 和 matrix version。不同矩陣配置不可共用 denominator 或 leaderboard。
+
+### 5.0.2 評委一致性不是正確性
+
+一致性統計回答不同問題，必須以 case 為重抽樣單位並輸出 `eligible_n`、`missing_n`、stratum 和 uncertainty：
+
+- **Krippendorff’s alpha（ordinal）**：多評委對 0–3 維度分數；red-line TRUE/FALSE 另用 nominal 型態。
+- **Kendall’s W**：多評委對 subject ranking 的協調程度，記錄 ties policy 與 ranking population。
+- **Spearman rho**：兩位評委的排序趨勢，不宣稱絕對尺度一致。
+- **Pairwise agreement**：同一 pair/case/turn 的方向一致率；另報 tie policy、position-flip rate，必要時提供機率一致校正。
+
+這些數值一律標示為 `DESCRIPTIVE_ONLY`。Judge 是否可作 release signal，必須在 frozen、分層的 human/adjudicated benchmark 上檢查 red-line sensitivity、每維 agreement、claim/evidence span agreement 和 judge drift；judge-vs-judge 高一致不能取代 human correctness。
 
 ### 5.1 Route 與 safety
 
@@ -224,6 +262,14 @@ Stability 在相同 deployment、model、prompt、knowledge、hyperparameters �
 
 Baseline 必須是通過 schema/digest/`FINAL`/measurement contract 的正式 workbook。stability 不能替代 controlled experiment；一次低分也不能單獨證明需要改 prompt 或 capsule。
 
+### 7.1 EDD 的可證偽迴圈
+
+每個修改都要留下「失敗 observation → root-cause hypothesis → 單變量 control/candidate → target metric → non-target guardrails → verdict」鏈。只提高平均分而造成任何 critical hard-gate regression 的變更必須拒絕；沒有受控 variant 的 recommendation 只能標為 `hypothesis`，不能寫成 root cause 或已驗證改善。
+
+### 7.2 Memory 的獨立測量
+
+多輪 case 不只檢查 final answer。每個 `memory_checkpoint` 分別評估 `remember`、`retrieve`、`not_use`、`update`、`isolation` 和 `stale/unsafe`；報告 memory precision/recall、污染/越權數與跨重跑一致性。Memory failure 不得被一般 helpfulness 或表達分數稀釋。
+
 ## 8. 報告閱讀與決策規則
 
 先讀 `report.md` 的 artifact state、coverage、operation status，再讀 overall/dimension score，最後用 `results.xlsx` 核查逐 case/turn evidence。推薦順序：
@@ -265,6 +311,7 @@ Baseline 必須是通過 schema/digest/`FINAL`/measurement contract 的正式 wo
 - 不能由 route ID、capsule injection count 或 Ground `resolved_refs` 證明回答一定使用了該內容，更不能證明 token-level 或因果來源。
 - 不能在沒有 reviewed retrieval oracle、finite universe 或 citation oracle 時，可靠計算 Ground/retrieval precision、recall、F1、TN 或 citation recall；此時必須標示 `SKIP`/`UNAVAILABLE`。
 - 不能把一次 run 的相關性當成因果結論；沒有 controlled experiment，不能斷言某個 prompt、capsule 或 router 修改造成改善。
+- 不能把 absolute score、pairwise 勝率或評委一致性互相替代；pairwise 只回答相對偏好，一致性只回答測量者是否相似，兩者都不證明客觀正確。
 - 不能把 provider/API failure、timeout、缺失 telemetry 或未執行 case 解讀為品質零分，也不能據此比較模型能力。
 - 不能用 overall average 取代 high-risk safety recall、red-line analysis、coverage 或 subgroup analysis。
 - 不能僅靠 Judge 分數證明法律內容在現實中一定正確、資源一定可用、使用者一定採納建議，或實際安全結果已改善。
