@@ -33,7 +33,7 @@ from xiaoan_eval.cases import (
 def _judge_json(rule, score: int, *, triggered: str | None = None) -> str:
     return json.dumps({
         "red_lines": [
-            {"id": item.id, "triggered": item.id == triggered, "evidence": []}
+            {"id": item.id, "triggered": item.id == triggered, "evidence": ["unsafe span"] if item.id == triggered else []}
             for item in rule.red_lines
         ],
         "dimensions": {module.name: score for module in rule.modules},
@@ -313,6 +313,21 @@ def test_matrix_rejects_non_string_red_line_evidence() -> None:
     assert rows[0]["scores"] == {}
 
 
+def test_matrix_requires_non_empty_evidence_for_triggered_red_line() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    invalid = json.loads(_judge_json(rule, 2))
+    invalid["red_lines"][0].update({"triggered": True, "evidence": []})
+    rows = run_matrix(
+        ({"id": "TC", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer"},
+        judge_transport=lambda *_args: {"text": json.dumps(invalid)}, rating_rule=rule,
+    )
+    assert rows[0]["status"] == "UNAVAILABLE"
+    assert rows[0]["weighted_score"] is None
+
+
 def test_matrix_marks_self_judging_outside_primary_denominator() -> None:
     rule = load_rating_rule("ratings rule.yml")
     rows = run_matrix(
@@ -325,6 +340,24 @@ def test_matrix_marks_self_judging_outside_primary_denominator() -> None:
     )
     assert rows[0]["self_judging"] is True
     assert rows[0]["primary_eligible"] is False
+    assert "SELF_ISOLATED" in render_matrix_report(rows)
+
+
+def test_workbook_main_matrix_isolates_self_score_in_separate_sheet(tmp_path: Path) -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    rows = run_matrix(
+        ({"id": "TC", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "same", "latest", "medium"),),
+        (ModelSpec("gpt", "same", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer"},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 3)}, rating_rule=rule,
+    )
+    path = tmp_path / "results.xlsx"
+    write_matrix_workbook(rows, path)
+    workbook = load_workbook(path, read_only=True)
+    assert workbook["Matrix"].cell(2, 2).value == "SELF_ISOLATED"
+    isolated = list(workbook["Self_Judging_Isolated"].iter_rows(values_only=True))
+    assert isolated[1][5] == 3
 
 
 def test_first_character_latency_is_only_copied_from_explicit_telemetry() -> None:
@@ -411,7 +444,33 @@ def test_matrix_collects_memory_lifecycle_from_structured_trace() -> None:
         judge_transport=lambda *_args: {"text": _judge_json(rule, 2)}, rating_rule=rule,
     )
     assert rows[0]["memory_metrics"][0]["status"] == "pass"
-    assert rows[0]["memory_metrics"][0]["isolated"] is True
+    assert rows[0]["memory_metrics"][0]["isolated"] is None
+
+
+def test_memory_checkpoint_types_do_not_all_require_memory_used_true() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    case = {
+        "id": "TC-memory-types",
+        "memory_checkpoints": [
+            {"after_turn": 1, "facts": ["forbidden"], "usage": "must not use", "type": "not_use"},
+            {"after_turn": 1, "facts": ["tenant-a"], "usage": "isolate", "type": "isolation"},
+        ],
+        "turns": ({"turn": 1, "user": "hello"},),
+    }
+    state = {
+        "memory_used": True,
+        "memory_used_facts": ["allowed"],
+        "memory_isolated": False,
+        "memory_contamination_candidates": ["tenant-b"],
+    }
+    rows = run_matrix(
+        (case,), (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer", "chatflow_debug": {"state": state}},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)}, rating_rule=rule,
+    )
+    assert [item["status"] for item in rows[0]["memory_metrics"]] == ["pass", "fail"]
+    assert rows[0]["memory_metrics"][1]["contamination_candidates"] == ("tenant-b",)
 
 
 def test_matrix_checkpoints_each_completed_provider_call(tmp_path: Path) -> None:
@@ -765,6 +824,40 @@ def test_matrix_resume_reuses_completed_lanes(tmp_path: Path) -> None:
     )
 
     assert second == first
+
+
+def test_matrix_resume_reuses_attribution_without_duplicate_event(tmp_path: Path) -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    checkpoint = tmp_path / "matrix-checkpoint.jsonl"
+    calls = 0
+    trace = {"effective_context_snapshot": {"schema_version": "effective-context-snapshot/v1", "snapshot_id": "snap", "turn": 1, "context_kind": "BASELINE", "router": {"status": "NOT_APPLICABLE", "units": []}, "composer": {"status": "INVOKED", "units": []}}}
+
+    def attribution(_request):
+        nonlocal calls
+        calls += 1
+        return json.dumps({"contract_version": "attribution/v1", "claims": [], "policies": [], "abstention": {"status": "ANSWERED", "reason": None}})
+
+    args = dict(
+        cases=({"id": "TC", "turns": ({"turn": 1, "user": "hello"},)},),
+        subjects=(ModelSpec("gpt", "subject", "latest", "medium"),),
+        judges=(ModelSpec("claude", "judge", "judge", "medium"),),
+        rating_rule=rule, checkpoint_path=checkpoint,
+        attribution_provider=attribution,
+    )
+    first = run_matrix(
+        **args,
+        subject_transport=lambda *_args: {"text": "answer", "chatflow_debug": trace},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)},
+    )
+    event_count = sum(json.loads(line)["event"] == "attribution" for line in checkpoint.read_text(encoding="utf-8").splitlines())
+    second = run_matrix(
+        **args, resume=True,
+        subject_transport=lambda *_args: (_ for _ in ()).throw(AssertionError("subject repeated")),
+        judge_transport=lambda *_args: (_ for _ in ()).throw(AssertionError("judge repeated")),
+    )
+    assert second == first
+    assert calls == 1
+    assert sum(json.loads(line)["event"] == "attribution" for line in checkpoint.read_text(encoding="utf-8").splitlines()) == event_count
 
 
 def test_matrix_resume_preserves_validated_error_class(tmp_path: Path) -> None:

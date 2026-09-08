@@ -68,6 +68,7 @@ class MemoryCheckpoint:
     after_turn: int
     facts: tuple[str, ...]
     usage: str
+    check_type: str = "use"
 
 
 @dataclass(frozen=True)
@@ -369,10 +370,15 @@ def _parse_checkpoint(raw: Mapping[str, Any]) -> MemoryCheckpoint:
     after_turn = raw.get("after_turn")
     if not isinstance(after_turn, int) or isinstance(after_turn, bool) or after_turn < 1:
         raise CaseValidationError("memory_checkpoints.after_turn must be a positive integer")
+    check_type = raw.get("type", "use")
+    allowed_types = {"remember", "retrieve", "use", "not_use", "update", "isolation", "stale", "unsafe"}
+    if check_type not in allowed_types:
+        raise CaseValidationError(f"memory_checkpoints.type must be one of {sorted(allowed_types)}")
     return MemoryCheckpoint(
         after_turn=after_turn,
         facts=_string_tuple(raw.get("facts"), "memory_checkpoints.facts", allow_empty=False),
         usage=_required_string(raw, "usage", "memory_checkpoint"),
+        check_type=str(check_type),
     )
 
 

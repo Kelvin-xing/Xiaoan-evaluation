@@ -3,11 +3,13 @@ import pytest
 from xiaoan_eval.methodology_metrics import (
     agreement_report,
     pairwise_decision,
+    red_line_agreement_report,
     run_pairwise_pass,
     self_judging,
     summarize_memory_metrics,
     summarize_pairwise,
 )
+from xiaoan_eval.methodology_runtime import build_matrix_summaries
 
 
 def _pair(**overrides):
@@ -60,3 +62,39 @@ def test_agreement_self_judging_and_memory_are_denominator_aware():
     memory = summarize_memory_metrics([{"status": "pass"}, {"status": "skip"}])
     assert memory["retention_and_use_rate"] == 1
     assert memory["missing_n"] == 1
+
+
+def test_diagonal_self_matrix_keeps_kendall_population_and_red_line_denominator():
+    rows = []
+    for subject_index, subject in enumerate(("a", "b", "c")):
+        for judge in ("a", "b", "c"):
+            rows.append({
+                "case_id": "TC", "turn": 1, "status": "PASS",
+                "subject": {"id": subject}, "judge": {"id": judge},
+                "scores": {"quality": subject_index}, "self_judging": subject == judge,
+                "triggered_red_lines": (), "red_line_evidence": {"RL": ()},
+            })
+    quality = agreement_report(rows, "quality")
+    assert quality["kendall_strata"][0]["subject_n"] == 3
+    assert quality["kendall_strata"][0]["missing_policy"] == "SELF_EXCLUDED_MIDRANK"
+    assert quality["kendall_strata"][0]["kendall_w"] is not None
+    red_line = red_line_agreement_report(rows, "RL")
+    assert red_line["eligible_n"] == 6
+    assert red_line["missing_n"] == 3
+
+
+def test_memory_fact_metrics_exclude_not_use_and_report_contamination():
+    memory = summarize_memory_metrics([
+        {"status": "pass", "check_type": "retrieve", "expected_facts": ["a", "b"], "retrieved_facts": ["a", "extra"]},
+        {"status": "pass", "check_type": "not_use", "expected_facts": ["forbidden"], "retrieved_facts": []},
+        {"status": "fail", "check_type": "isolation", "contamination_candidates": ["other-user"]},
+    ])
+    assert memory["fact_retrieval"]["precision"] == pytest.approx(0.5)
+    assert memory["fact_retrieval"]["recall"] == pytest.approx(0.5)
+    assert memory["contamination"]["candidate_n"] == 1
+
+
+def test_attribution_summary_distinguishes_not_run_from_all_failed():
+    assert build_matrix_summaries([])["attribution"]["status"] == "NOT_RUN"
+    failed = build_matrix_summaries([], attribution_results=[{"status": "UNAVAILABLE"}])
+    assert failed["attribution"]["status"] == "UNAVAILABLE"

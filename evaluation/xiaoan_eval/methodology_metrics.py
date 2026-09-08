@@ -197,12 +197,18 @@ def agreement_report(rows: Sequence[Mapping[str, Any]], dimension: str) -> dict[
         strata[stratum][str(row["subject"]["id"])][str(row["judge"]["id"])] = float(row["scores"][dimension])
     kendall_strata = []
     for (case_id, turn), subjects in sorted(strata.items()):
-        complete_subjects = [scores for scores in subjects.values() if all(judge in scores for judge in judges)]
+        comparable_subjects = [scores for scores in subjects.values() if scores]
+        kendall_value, comparable_judges, imputed_n = _kendall_w_incomplete(
+            comparable_subjects, judges
+        )
         kendall_strata.append({
             "case_id": case_id, "turn": turn,
-            "subject_n": len(complete_subjects),
-            "judge_n": len(judges),
-            "kendall_w": _kendall_w(complete_subjects, judges),
+            "subject_n": len(comparable_subjects),
+            "judge_n": len(comparable_judges),
+            "judge_ids": comparable_judges,
+            "missing_n": imputed_n,
+            "missing_policy": "SELF_EXCLUDED_MIDRANK",
+            "kendall_w": kendall_value,
         })
     available_w = [item["kendall_w"] for item in kendall_strata if item["kendall_w"] is not None]
     kendall = sum(available_w) / len(available_w) if available_w else None
@@ -224,6 +230,42 @@ def agreement_report(rows: Sequence[Mapping[str, Any]], dimension: str) -> dict[
     }
 
 
+def red_line_agreement_report(rows: Sequence[Mapping[str, Any]], red_line_id: str) -> dict[str, Any]:
+    """Nominal agreement for one red-line decision with explicit denominator."""
+    values: dict[tuple[str, int, str], dict[str, bool]] = defaultdict(dict)
+    eligible_n = 0
+    for row in rows:
+        evidence = row.get("red_line_evidence", {})
+        if (
+            row.get("status") != "PASS"
+            or row.get("self_judging", False)
+            or not isinstance(evidence, Mapping)
+            or red_line_id not in evidence
+        ):
+            continue
+        unit = (str(row.get("case_id")), int(row.get("turn", 0)), str(row["subject"]["id"]))
+        values[unit][str(row["judge"]["id"])] = red_line_id in set(row.get("triggered_red_lines", ()))
+        eligible_n += 1
+    judges = sorted({judge for cell in values.values() for judge in cell})
+    pairwise = []
+    for index, left in enumerate(judges):
+        for right in judges[index + 1:]:
+            pairs = [(cell[left], cell[right]) for cell in values.values() if left in cell and right in cell]
+            pairwise.append({
+                "left_judge": left, "right_judge": right, "eligible_n": len(pairs),
+                "exact_agreement": sum(a == b for a, b in pairs) / len(pairs) if pairs else None,
+            })
+    return {
+        "interpretation": "DESCRIPTIVE_ONLY",
+        "red_line_id": red_line_id,
+        "attempted_n": len(rows),
+        "eligible_n": eligible_n,
+        "missing_n": len(rows) - eligible_n,
+        "krippendorff_alpha_nominal": _nominal_alpha(list(values.values())),
+        "pairwise_exact_agreement": pairwise,
+    }
+
+
 def summarize_memory_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Aggregate memory lifecycle and fact retrieval without imputing missing data.
 
@@ -236,7 +278,8 @@ def summarize_memory_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, 
     passed = sum(str(row.get("status", "")).lower() == "pass" for row in available)
     expected: set[str] = set()
     retrieved: set[str] = set()
-    for index, row in enumerate(available):
+    fact_rows = [row for row in available if row.get("check_type", "use") in {"remember", "retrieve", "use"}]
+    for index, row in enumerate(fact_rows):
         expected.update(f"{index}:{fact}" for fact in _strings(row.get("expected_facts")))
         retrieved.update(f"{index}:{fact}" for fact in _strings(row.get("retrieved_facts")))
     tp, fp, fn = len(expected & retrieved), len(retrieved - expected), len(expected - retrieved)
@@ -252,6 +295,11 @@ def summarize_memory_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, 
             "rate": sum(observed) / len(observed) if observed else None,
         }
     stale = [bool(row["stale_or_unsafe"]) for row in available if isinstance(row.get("stale_or_unsafe"), bool)]
+    contamination = [
+        len(_strings(row.get("contamination_candidates"))) for row in available
+        if isinstance(row.get("contamination_candidates"), Sequence)
+        and not isinstance(row.get("contamination_candidates"), (str, bytes))
+    ]
     return {
         "status": "AVAILABLE" if available else "UNAVAILABLE",
         "attempted_n": len(results),
@@ -268,6 +316,12 @@ def summarize_memory_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, 
         "stale_or_unsafe": {
             "eligible_n": len(stale), "missing_n": len(available) - len(stale),
             "rate": sum(stale) / len(stale) if stale else None,
+        },
+        "contamination": {
+            "eligible_n": len(contamination),
+            "missing_n": len(available) - len(contamination),
+            "candidate_n": sum(contamination),
+            "clean_rate": sum(count == 0 for count in contamination) / len(contamination) if contamination else None,
         },
     }
 
@@ -312,6 +366,51 @@ def _ordinal_alpha(cells: Sequence[Mapping[str, float]]) -> float | None:
         for left in categories for right in categories
     ) / (total * (total - 1))
     return 1.0 if expected == 0 and observed == 0 else (None if expected == 0 else 1 - observed / expected)
+
+
+def _nominal_alpha(cells: Sequence[Mapping[str, bool]]) -> float | None:
+    coincidence: dict[tuple[bool, bool], float] = defaultdict(float)
+    for cell in cells:
+        values = list(cell.values())
+        if len(values) < 2:
+            continue
+        for index, left in enumerate(values):
+            for right_index, right in enumerate(values):
+                if index != right_index:
+                    coincidence[(left, right)] += 1 / (len(values) - 1)
+    marginals = {label: sum(coincidence[(label, other)] for other in (False, True)) for label in (False, True)}
+    total = sum(marginals.values())
+    if total < 2:
+        return None
+    observed = sum(value for (left, right), value in coincidence.items() if left != right) / total
+    expected = sum(marginals[left] * marginals[right] for left in (False, True) for right in (False, True) if left != right) / (total * (total - 1))
+    return 1.0 if expected == 0 and observed == 0 else (None if expected == 0 else 1 - observed / expected)
+
+
+def _kendall_w_incomplete(cells: Sequence[Mapping[str, float]], judges: Sequence[str]) -> tuple[float | None, list[str], int]:
+    """Use explicit midrank imputation only for isolated/missing judge cells."""
+    n = len(cells)
+    if n < 2:
+        return None, [], 0
+    usable = [judge for judge in judges if sum(judge in cell for cell in cells) >= 2]
+    if len(usable) < 2:
+        return None, usable, sum(judge not in cell for cell in cells for judge in usable)
+    ranked_by_judge: dict[str, list[float]] = {}
+    imputed = 0
+    for judge in usable:
+        observed_indices = [index for index, cell in enumerate(cells) if judge in cell]
+        observed_ranks = _ranks([cells[index][judge] for index in observed_indices])
+        scaled: dict[int, float] = {}
+        k = len(observed_indices)
+        for index, rank in zip(observed_indices, observed_ranks):
+            scaled[index] = 1 + (rank - 1) * (n - 1) / (k - 1) if k > 1 else (n + 1) / 2
+        ranked_by_judge[judge] = [scaled.get(index, (n + 1) / 2) for index in range(n)]
+        imputed += n - k
+    completed = [
+        {judge: ranked_by_judge[judge][index] for judge in usable}
+        for index in range(n)
+    ]
+    return _kendall_w(completed, usable), usable, imputed
 
 
 def _kendall_w(cells: Sequence[Mapping[str, float]], judges: Sequence[str]) -> float | None:

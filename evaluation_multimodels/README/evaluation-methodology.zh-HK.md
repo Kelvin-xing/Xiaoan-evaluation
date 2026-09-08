@@ -173,7 +173,7 @@ dedicated attribution   -> 哪個 layer/span 以何種 relation 支持 claim
 - Spearman rho：兩 Judge 的排序趨勢。
 - Pairwise agreement：同 pair/case/turn 的方向一致、ties policy、position-flip。
 
-Matrix 已在 `Judge_Agreement` worksheet 輸出 ordinal alpha、Kendall W、pairwise Spearman、`DESCRIPTIVE_ONLY`、`eligible_n` 及 `missing_n`；Kendall W 按 case/turn strata 計算，self-judging 及 unavailable cells 不進分母。
+Matrix 已在 `Judge_Agreement` worksheet 輸出 ordinal alpha、Kendall W、pairwise Spearman、`DESCRIPTIVE_ONLY`、`eligible_n` 及 `missing_n`，並在 `Red_Line_Agreement` 輸出 nominal alpha 與 pairwise exact agreement。Kendall W 按 case/turn strata 計算；self-judging 及 unavailable cells 不作為觀測分數，對角 self-exclusion 造成的排名缺值使用明示的 `SELF_EXCLUDED_MIDRANK` policy，同時報告補值數；ordinal alpha 不插補 missing cells。
 
 Pairwise directional agreement、ties policy、position-flip 需由 pairwise decisions 計算；matrix CLI 尚未自動產生這些 decisions，因此此子項為 **Planned**。統計 uncertainty/CI 亦未進 workbook，屬 **Planned**。一致性不是正確性；正式 release 仍需 frozen human/adjudicated benchmark。
 

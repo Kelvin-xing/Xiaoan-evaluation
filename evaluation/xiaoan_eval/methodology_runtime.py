@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
 from typing import Any, Callable, Mapping, Sequence
 
 from .attribution_client import AttributionClient
-from .methodology_metrics import agreement_report, summarize_memory_metrics
+from .methodology_metrics import agreement_report, red_line_agreement_report, summarize_memory_metrics
 
 
 def run_attribution_pass(
@@ -29,7 +30,8 @@ def run_attribution_pass(
             continue
         try:
             result = client.judge(str(text), snapshot)
-            output.append({"answer_id": answer_id, "status": "AVAILABLE", "result": asdict(result), "error_type": None})
+            normalized = json.loads(json.dumps(asdict(result), ensure_ascii=False))
+            output.append({"answer_id": answer_id, "status": "AVAILABLE", "result": normalized, "error_type": None})
         except Exception as exc:  # invalid/provider output is operationally unavailable
             output.append({"answer_id": answer_id, "status": "UNAVAILABLE", "result": None, "error_type": type(exc).__name__, "error": str(exc)})
     return output
@@ -42,7 +44,16 @@ def build_matrix_summaries(
     attribution_results: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     dimensions = sorted({str(name) for row in rows for name in row.get("scores", {})})
+    red_line_ids = sorted({
+        str(identifier) for row in rows
+        for identifier in row.get("red_line_evidence", {})
+    })
     attribution_available = sum(item.get("status") == "AVAILABLE" for item in attribution_results)
+    attribution_status = (
+        "NOT_RUN" if not attribution_results
+        else "AVAILABLE" if attribution_available
+        else "UNAVAILABLE"
+    )
     return {
         "primary_denominator": {
             "eligible_n": sum(row.get("status") == "PASS" and row.get("primary_eligible", True) for row in rows),
@@ -50,9 +61,11 @@ def build_matrix_summaries(
             "operationally_unavailable_n": sum(row.get("status") != "PASS" for row in rows),
         },
         "agreement": {dimension: agreement_report(rows, dimension) for dimension in dimensions},
+        "red_line_agreement": {identifier: red_line_agreement_report(rows, identifier) for identifier in red_line_ids},
         "memory": summarize_memory_metrics(memory_results),
         "attribution": {
-            "status": "AVAILABLE" if attribution_available else "UNAVAILABLE",
+            "status": attribution_status,
+            "attempted_n": len(attribution_results),
             "eligible_n": attribution_available,
             "missing_n": len(attribution_results) - attribution_available,
         },

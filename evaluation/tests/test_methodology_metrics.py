@@ -3,6 +3,7 @@ import pytest
 from xiaoan_eval.methodology_metrics import (
     agreement_report,
     pairwise_decision,
+    red_line_agreement_report,
     run_pairwise_pass,
     self_judging,
     summarize_memory_metrics,
@@ -95,6 +96,38 @@ def test_agreement_excludes_self_judging_and_unavailable_cells():
     assert report["pairwise_spearman"][0]["spearman_rho"] == pytest.approx(1)
 
 
+def test_kendall_w_diagonal_self_matrix_uses_explicit_midrank_missing_policy():
+    rows = []
+    subjects = ("a", "b", "c")
+    for subject_index, subject in enumerate(subjects):
+        for judge_index, judge in enumerate(subjects):
+            rows.append({
+                "case_id": "TC", "turn": 1, "status": "PASS",
+                "subject": {"id": subject}, "judge": {"id": judge},
+                "scores": {"quality": subject_index},
+                "self_judging": subject == judge,
+            })
+    report = agreement_report(rows, "quality")
+    stratum = report["kendall_strata"][0]
+    assert stratum["subject_n"] == 3
+    assert stratum["judge_n"] == 3
+    assert stratum["missing_n"] == 3
+    assert stratum["missing_policy"] == "SELF_EXCLUDED_MIDRANK"
+    assert stratum["kendall_w"] is not None
+
+
+def test_red_line_nominal_agreement_excludes_self_and_reports_denominator():
+    rows = [
+        {"case_id": "TC", "turn": 1, "status": "PASS", "subject": {"id": "s"}, "judge": {"id": "j1"}, "self_judging": False, "triggered_red_lines": ("RL",), "red_line_evidence": {"RL": ("span",)}},
+        {"case_id": "TC", "turn": 1, "status": "PASS", "subject": {"id": "s"}, "judge": {"id": "j2"}, "self_judging": False, "triggered_red_lines": ("RL",), "red_line_evidence": {"RL": ("span",)}},
+        {"case_id": "TC", "turn": 1, "status": "PASS", "subject": {"id": "s"}, "judge": {"id": "self"}, "self_judging": True, "triggered_red_lines": (), "red_line_evidence": {"RL": ()}},
+    ]
+    report = red_line_agreement_report(rows, "RL")
+    assert report["eligible_n"] == 2
+    assert report["missing_n"] == 1
+    assert report["krippendorff_alpha_nominal"] == pytest.approx(1)
+
+
 def test_self_judging_requires_same_provider_and_model():
     assert self_judging({"provider": "gpt", "model": "m"}, {"provider": "gpt", "model": "m"})
     assert not self_judging({"provider": "gpt", "model": "m"}, {"provider": "gpt", "model": "other"})
@@ -107,3 +140,14 @@ def test_memory_metrics_preserve_missing_denominator():
     assert summary["eligible_n"] == 2
     assert summary["missing_n"] == 1
     assert summary["retention_and_use_rate"] == pytest.approx(0.5)
+
+
+def test_non_retrieval_memory_checks_do_not_create_false_fact_false_negatives():
+    summary = summarize_memory_metrics([
+        {"status": "pass", "check_type": "retrieve", "expected_facts": ["a", "b"], "retrieved_facts": ["a", "extra"]},
+        {"status": "pass", "check_type": "not_use", "expected_facts": ["forbidden"], "retrieved_facts": []},
+        {"status": "fail", "check_type": "isolation", "contamination_candidates": ["other-user"]},
+    ])
+    assert summary["fact_retrieval"] == {"tp": 1, "fp": 1, "fn": 1, "precision": 0.5, "recall": 0.5}
+    assert summary["contamination"]["candidate_n"] == 1
+    assert summary["contamination"]["clean_rate"] == 0
