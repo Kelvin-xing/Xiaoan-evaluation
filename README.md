@@ -50,6 +50,20 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -p no:rerunfailures -q
 
 ## 4. 單一 deployment 評測（`evaluation/`）
 
+### 4.0 先選評估模式
+
+| 想回答的問題 | 使用命令 | 是否呼叫模型 |
+| --- | --- | --- |
+| Cases 與規則能否安全執行？ | `preflight` | 否 |
+| 一個 Chatflow deployment 是否符合 safety、route、quality 與 evidence contract？ | `run` | 是 |
+| 已有 JSONL 如何轉成正式報告？ | `report` | 否 |
+| Candidate 是否優於相容 baseline？ | `experiment` | 否；聚合既有 runs |
+| 受控修改是否造成改善？ | `auto-experiment`／`auto-file-experiment` | 由 runner plugin 決定 |
+| 同一設定重跑是否穩定？ | `stability` | 否；比較既有 runs |
+| 自動 Judge 結果是否需要人工覆核？ | `export-human-review` → `import-human-review` → `adjudicate` | 否 |
+
+先執行 `preflight`，再執行 `run` 或 `matrix`。只有需要比較版本時才加入 baseline、experiment 或 stability；它們不能補救原始 run 的 provider failure。
+
 ### 4.1 Preflight
 
 Preflight 不呼叫 XiaoAn，只檢查 case schema、rating rule、PII/input integrity 和必要的 manifest 欄位：
@@ -79,7 +93,34 @@ xiaoan-eval run test-cases \
 
 輸出目錄必須是空的，或已包含一對通過驗證的 `results.xlsx` 和 `report.md`。程式不會默默刪除未知檔案。
 
-### 4.3 把既有 JSONL 轉成報告
+### 4.3 `run` 參數
+
+| 參數 | 必填 | 預設／選項 | 用途 |
+| --- | :---: | --- | --- |
+| `cases` | 是 | 無 | YAML cases 所在目錄。 |
+| `--base-url` | 是 | 無 | XiaoAn FastAPI URL，例如 `http://127.0.0.1:8000`。 |
+| `--judge-plugin` | 是 | `MODULE:CALLABLE` | Primary rubric Judge。 |
+| `--context-provider` | 是 | `MODULE:CALLABLE` | 根據 trace 重建 authoritative evidence。 |
+| `--manifest` | 是 | 無 | 固定 deployment、model、prompt、knowledge、seed 與 retry contract。 |
+| `--output` | 是 | 無 | `results.xlsx`／`report.md` 的目錄。 |
+| `--rating-rule` | 否 | `ratings rule.yml` | 0–3 anchors、red lines、module weights。 |
+| `--config` | 否 | `evaluator-config.yml` | Review threshold、dynamic weight 等 evaluator 設定。 |
+| `--secondary-judge-plugin` | 否 | 不執行 | 需要第二位 rubric Judge 時使用。 |
+| `--disable-secondary-judge` | 否 | 關閉 | 即使配置 secondary plugin，也明確停用。 |
+| `--attribution-judge-plugin` | 否 | `NOT_RUN` | 在 captured evidence snapshot 上做獨立 claim attribution。 |
+| `--attribution-judge-version` | 否 | CLI 預設值 | 記錄 attribution contract／Judge 版本。 |
+| `--egress-validator` | 否 | 不執行 | 發送 Judge request 前檢查 PII／secret。 |
+| `--baseline` | 否 | 不比較 | 相容的 baseline `results.xlsx`。 |
+| `--release-review` | 否 | 關閉 | 使用 release review policy 決定是否要求 secondary／人工覆核。 |
+| `--recommendation-plugin` | 否 | 不執行 | 根據證據產生改進假設；不是因果證明。 |
+| `--suite-id` | 否 | project default | 自訂 suite identity。 |
+| `--suite-version` | 否 | project default | 自訂 suite version。 |
+| `--taxonomy-version` | 否 | project default | 自訂 taxonomy version。 |
+| `--suite-ledger` | 否 | output 旁私有 JSONL | 指定 append-only attempt ledger。 |
+| `--case-concurrency` | 否 | `2` | 同時執行的獨立 cases；同一 case turns 不並行。 |
+| `--compact` | 否 | deprecated | 相容舊命令；輸出永遠是兩檔 pair。 |
+
+### 4.4 把既有 JSONL 轉成報告
 
 ```bash
 xiaoan-eval report private/case-results.jsonl \
@@ -116,6 +157,101 @@ xiaoan-eval matrix test-cases \
 ```
 
 `--resume` 只會重用私有 checkpoint 中已完成且契約相容的 answer/judge cells。Matrix 內的 provider failure 必須保留為 `UNAVAILABLE`，不得改寫成 0 分或從分母中假裝不存在。
+
+### 5.1 5×5 全 Judge 範例
+
+建立只含每家最高級模型的 subjects/judges JSON。每個 object 都要提供 `provider`、`model`；`tier` 與 `reasoning_effort` 可按 registry 設定。
+
+```json
+[
+  {"provider":"claude","model":"claude-opus-5","tier":"latest","reasoning_effort":"medium"},
+  {"provider":"gpt","model":"gpt-5.6-sol","tier":"latest","reasoning_effort":"medium"},
+  {"provider":"gemini","model":"gemini-3-pro-preview-thinking","tier":"latest","reasoning_effort":"medium"},
+  {"provider":"qwen","model":"qwen3.8-max","tier":"latest","reasoning_effort":"medium"},
+  {"provider":"kimi","model":"kimi-k3","tier":"latest","reasoning_effort":"medium"}
+]
+```
+
+把同樣五個 model 設為 judges，並把 `tier` 改為 `judge`。模型 ID 必須先以目前 provider registry 驗證，README 中的示例不是永久可用性保證。
+
+```bash
+cd evaluation_multimodels
+PYTHONPATH=. python -m xiaoan_eval matrix test-cases \
+  --subject-transport company_eval_plugins:xiaoan_chatflow_transport \
+  --judge-transport company_eval_plugins:multimodel_transport \
+  --subjects private/subjects-latest.json \
+  --judges private/judges-latest.json \
+  --rating-rule 'ratings rule.yml' \
+  --subject-concurrency 2 \
+  --judge-concurrency 3 \
+  --max-in-flight 3 \
+  --per-provider-concurrency 1 \
+  --output runs/<matrix-id>
+```
+
+這會先完成所有 subject answers，再對 frozen answers 執行全部 Judges。`subject=judge` cells 會保留，但標記 `self_judging` 並排除 primary ranking／agreement denominator。
+
+### 5.2 `matrix` 參數
+
+| 參數 | 必填 | 預設／選項 | 用途 |
+| --- | :---: | --- | --- |
+| `cases` | 是 | 無 | YAML cases 目錄；可用只含目標 cases 的目錄縮小範圍。 |
+| `--output` | 是 | 無 | Matrix workbook、report 與 pair workbooks 目錄。 |
+| `--subject-transport` | 是 | `MODULE:CALLABLE` | 產生 subject answer 的 transport。 |
+| `--judge-transport` | 是 | `MODULE:CALLABLE` | 執行 rubric Judge 的 transport。 |
+| `--subjects` | 否 | 5 providers × latest/second | JSON `ModelSpec` 陣列；用它建立 5×5 或自訂矩陣。 |
+| `--judges` | 否 | 每 provider 一個 Judge | JSON `ModelSpec` 陣列。 |
+| `--rating-rule` | 否 | `ratings rule.yml` | 共用 red-line、dimension 與 weight contract。 |
+| `--attribution-judge-plugin` | 否 | `NOT_RUN` | 對 frozen answer 另跑 attribution；不與 rubric score 混合。 |
+| `--attribution-judge-version` | 否 | `attribution-judge/v1` | Attribution Judge/version identity。 |
+| `--resume` | 否 | 關閉 | 從 contract-compatible checkpoint 重用已完成 answers/cells。 |
+| `--checkpoint` | 否 | sibling `.matrix-audit` | 指定私有 append-only checkpoint。 |
+| `--allow-legacy-checkpoint` | 否 | 關閉 | 明確信任沒有新版 contract hash 的舊 checkpoint。 |
+| `--subject-concurrency` | 否 | `2` | 並行 subject×case lanes；每條 lane 的 turns 保持順序。 |
+| `--judge-concurrency` | 否 | `3` | 每個 answer 可並行的 stateless Judge calls。 |
+| `--max-in-flight` | 否 | `3` | 所有 provider calls 的全域上限。 |
+| `--per-provider-concurrency` | 否 | `1` | 同一 provider 同時請求數。 |
+
+調整 concurrency 會改變 queue、rate-limit、retry 與 failure distribution。比較品質時必須固定參數；性能調優應另開 serial/default/candidate runs，不要在同一矩陣中途改值。
+
+### 5.3 Matrix 輸出
+
+| Artifact／sheet | 內容 |
+| --- | --- |
+| `results.xlsx / Matrix` | Subject × Judge 聚合；先看 availability，再看數值。 |
+| `All_Answers` | 每個 frozen answer 一列，含 model、status、latency、tokens/cache 與 error。 |
+| `All_Judgements` | 每位 Judge 的原始 dimension/red-line 分數、identity、telemetry 與 status。 |
+| `Dimension_By_Judge` | 依 subject/Judge/dimension 的摘要。 |
+| `Self_Judging_Isolated` | 同 identity 自評 cells；不進 primary denominator。 |
+| `Judge_Agreement` | Ordinal alpha、Kendall W、pairwise Spearman；只描述一致性。 |
+| `Red_Line_Agreement` | Nominal alpha 與 pairwise exact agreement。 |
+| `Measurement_Contract` | Eligible、missing、self-judging、attribution/memory 狀態。 |
+| `pairs/*.xlsx` | 每個 subject×Judge pair 的獨立可審計 workbook。 |
+| `report.md` | Matrix、dimension、agreement、telemetry 與限制摘要。 |
+
+Matrix CLI exit code `1` 可表示存在 `UNAVAILABLE` cells，而不是 runner crash。必須同時檢查 checkpoint、workbook rows、25 pair files 和 error types。
+
+### 5.4 Pairwise 與 attribution 的現況
+
+Pairwise preference 目前只有 Python API contract，尚未接入 `matrix` CLI、自動建立反向 A/B pairs 或 workbook。`pairs/*.xlsx` 是 absolute subject×Judge 分冊，不是 A/B preference。
+
+Attribution 可透過 `--attribution-judge-plugin` 對 frozen answers 執行。它使用與 rubric Judge 不同的 prompt/schema；最好選不同 model family，並在 manifest/checkpoint 記錄 provider、model 和 version。
+
+### 5.5 其他命令參數速查
+
+| 命令 | 輸入／必要參數 | 主要選填參數 |
+| --- | --- | --- |
+| `preflight` | `cases` | `--rating-rule`、`--output`、`--pii-validator` |
+| `report` | `results --output` | `--pii-validator`、`--recommendation-plugin`；`--compact` 已 deprecated |
+| `experiment` | `--baseline`、`--variants`、兩組 manifests、`--target-cohort`、`--lever-type`、`--target`、`--output` | `--config`、`--pii-validator` |
+| `auto-experiment` | baseline、manifest、recommendation、cohort、runner plugin、output | `--config` |
+| `auto-file-experiment` | recommendation、cohort、output | `--variant-runner-plugin`、`--config` |
+| `stability` | `--runs`、`--manifests`、`--output` | `--pii-validator` |
+| `export-human-review` | `results --output` | `--rating-rule`；`--manifest` 已 deprecated |
+| `import-human-review` | `packet --output` | `--rating-rule` |
+| `adjudicate` | `results --case --turn --decision --adjudicator --rationale` | `--rating-rule` |
+
+任何命令都可用 `xiaoan-eval <command> --help` 取得當前安裝版本的精確 contract。README 用於選擇與理解參數；CLI help 是執行時的直接來源。
 
 ## 6. 評分定義
 
