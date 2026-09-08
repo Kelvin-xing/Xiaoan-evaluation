@@ -38,7 +38,7 @@ DEFAULT_MODEL_PAIRS = {
     "kimi": ("kimi-k3", "kimi-k2.6"),
 }
 JUDGE_EVIDENCE_SCHEMA_VERSION = "judge-evidence/v1"
-MATRIX_JUDGE_REQUEST_SCHEMA_VERSION = "matrix-judge-request/v2"
+MATRIX_JUDGE_REQUEST_SCHEMA_VERSION = "matrix-judge-request/v3"
 MATRIX_JUDGE_PROMPT_SCHEMA_VERSION = "matrix-judge-prompt/v1"
 JUDGE_CONTEXT_LAYERS = frozenset({"CAPSULE", "WIKI", "SOURCE"})
 
@@ -556,6 +556,7 @@ def _resume_row(answer_event: Mapping[str, Any], judgement_event: Mapping[str, A
         "answer": answer,
         "judgement": judged,
         "scores": dict(cell.get("scores", {})),
+        "expected_red_line_ids": tuple(cell.get("expected_red_line_ids", ())),
         "triggered_red_lines": tuple(cell.get("triggered_red_lines", ())),
         "red_line_evidence": {
             str(key): tuple(value) for key, value in dict(cell.get("red_line_evidence", {})).items()
@@ -668,7 +669,10 @@ def _memory_observations(case: Any, turn: int, trace: Mapping[str, Any] | None) 
         decision = {
             "remember": remembered,
             "retrieve": retrieved,
-            "use": remembered is True and used is True,
+            "use": (
+                remembered is True and set(expected_facts) <= set(used_facts)
+                if used_facts is not None else remembered is True and used is True
+            ),
             "not_use": (
                 not bool(set(expected_facts) & set(used_facts))
                 if used_facts is not None else (not used) if used is not None else None
@@ -685,10 +689,10 @@ def _memory_observations(case: Any, turn: int, trace: Mapping[str, Any] | None) 
             "retrieved_facts": retrieved_facts or (),
             "remembered": remembered,
             "retrieved": retrieved,
-            "used_when_required": used if check_type == "use" else None,
-            "not_used_when_forbidden": (not used) if check_type == "not_use" and used is not None else None,
+            "used_when_required": decision if check_type == "use" else None,
+            "not_used_when_forbidden": decision if check_type == "not_use" else None,
             "updated_correctly": updated if check_type == "update" else None,
-            "isolated": isolated if check_type == "isolation" else None,
+            "isolated": decision if check_type == "isolation" else None,
             "stale_or_unsafe": (not decision) if check_type in {"stale", "unsafe"} and decision is not None else None,
             "contamination_candidates": contamination if check_type == "isolation" and contamination is not None else None,
         }
@@ -907,6 +911,7 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
                         "subject": {**asdict(subject), "id": subject.id},
                         "judge": {**asdict(judge), "id": judge.id},
                         "answer": answer_data, "judgement": asdict(judged), "scores": scores,
+                        "expected_red_line_ids": tuple(item.id for item in rating_rule.red_lines),
                         "triggered_red_lines": triggered_red_lines,
                         "red_line_evidence": red_line_evidence,
                         "self_judging": is_self_judging,
@@ -917,7 +922,7 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
                         "status": "PASS" if answer.status == judged.status == "PASS" else "UNAVAILABLE",
                     }
                     turn_rows[index] = row
-                    savepoint({"event": "cell", "task_id": f"{lane_id}:turn:{turn_number}:cell:{judge.id}", "row": {"answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": row["subject"], "judge": row["judge"], "judgement_status": judged.status, "judgement_error": judged.error, "judgement_error_type": judged.error_type, "scores": row["scores"], "triggered_red_lines": row["triggered_red_lines"], "red_line_evidence": row["red_line_evidence"], "self_judging": row["self_judging"], "primary_eligible": row["primary_eligible"], "memory_metrics": row["memory_metrics"], "attribution": row["attribution"], "weighted_score": row["weighted_score"], "status": row["status"]}})
+                    savepoint({"event": "cell", "task_id": f"{lane_id}:turn:{turn_number}:cell:{judge.id}", "row": {"answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": row["subject"], "judge": row["judge"], "judgement_status": judged.status, "judgement_error": judged.error, "judgement_error_type": judged.error_type, "scores": row["scores"], "expected_red_line_ids": row["expected_red_line_ids"], "triggered_red_lines": row["triggered_red_lines"], "red_line_evidence": row["red_line_evidence"], "self_judging": row["self_judging"], "primary_eligible": row["primary_eligible"], "memory_metrics": row["memory_metrics"], "attribution": row["attribution"], "weighted_score": row["weighted_score"], "status": row["status"]}})
 
                 pending: list[tuple[int, ModelSpec]] = []
                 for index, judge in enumerate(judge_list):

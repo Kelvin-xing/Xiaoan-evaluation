@@ -33,7 +33,7 @@ def run_attribution_pass(answers: Sequence[Mapping[str, Any]], provider: Callabl
 
 def build_matrix_summaries(rows: Sequence[Mapping[str, Any]], *, memory_results: Sequence[Mapping[str, Any]] = (), attribution_results: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     dimensions = sorted({str(name) for row in rows for name in row.get("scores", {})})
-    red_line_ids = sorted({str(identifier) for row in rows for identifier in row.get("red_line_evidence", {})})
+    red_line_ids = sorted({str(identifier) for row in rows for identifier in (*row.get("expected_red_line_ids", ()), *row.get("red_line_evidence", {}))})
     attribution_available = sum(item.get("status") == "AVAILABLE" for item in attribution_results)
     attribution_status = "NOT_RUN" if not attribution_results else "AVAILABLE" if attribution_available else "UNAVAILABLE"
     return {

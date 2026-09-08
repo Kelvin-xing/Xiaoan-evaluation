@@ -98,3 +98,15 @@ def test_attribution_summary_distinguishes_not_run_from_all_failed():
     assert build_matrix_summaries([])["attribution"]["status"] == "NOT_RUN"
     failed = build_matrix_summaries([], attribution_results=[{"status": "UNAVAILABLE"}])
     assert failed["attribution"]["status"] == "UNAVAILABLE"
+
+
+def test_red_line_agreement_preserves_all_missing_contract_rows():
+    rows = [{
+        "status": "UNAVAILABLE", "expected_red_line_ids": ("RL-01",),
+        "red_line_evidence": {}, "triggered_red_lines": (),
+        "subject": {"id": "s"}, "judge": {"id": "j"},
+        "case_id": "TC", "turn": 1, "scores": {},
+    }]
+    report = build_matrix_summaries(rows)["red_line_agreement"]["RL-01"]
+    assert report["eligible_n"] == 0
+    assert report["missing_n"] == 1

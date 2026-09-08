@@ -46,7 +46,10 @@ def build_matrix_summaries(
     dimensions = sorted({str(name) for row in rows for name in row.get("scores", {})})
     red_line_ids = sorted({
         str(identifier) for row in rows
-        for identifier in row.get("red_line_evidence", {})
+        for identifier in (
+            *row.get("expected_red_line_ids", ()),
+            *row.get("red_line_evidence", {}),
+        )
     })
     attribution_available = sum(item.get("status") == "AVAILABLE" for item in attribution_results)
     attribution_status = (

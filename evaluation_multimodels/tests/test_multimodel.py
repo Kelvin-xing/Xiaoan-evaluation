@@ -471,6 +471,32 @@ def test_memory_checkpoint_types_do_not_all_require_memory_used_true() -> None:
     )
     assert [item["status"] for item in rows[0]["memory_metrics"]] == ["pass", "fail"]
     assert rows[0]["memory_metrics"][1]["contamination_candidates"] == ("tenant-b",)
+    assert rows[0]["memory_metrics"][0]["status"] == "pass"
+    assert rows[0]["memory_metrics"][0]["not_used_when_forbidden"] is True
+    assert rows[0]["memory_metrics"][1]["status"] == "fail"
+    assert rows[0]["memory_metrics"][1]["isolated"] is False
+
+
+def test_use_checkpoint_requires_the_expected_fact_when_used_facts_are_reported() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    case = {
+        "id": "TC-memory-use-facts",
+        "memory_checkpoints": [
+            {"after_turn": 1, "facts": ["required"], "usage": "use it", "type": "use"},
+        ],
+        "turns": ({"turn": 1, "user": "hello"},),
+    }
+    rows = run_matrix(
+        (case,), (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer", "chatflow_debug": {"state": {
+            "memory_facts": ["required"], "memory_used": True,
+            "memory_used_facts": ["different"],
+        }}},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)}, rating_rule=rule,
+    )
+    assert rows[0]["memory_metrics"][0]["status"] == "fail"
+    assert rows[0]["memory_metrics"][0]["used_when_required"] is False
 
 
 def test_matrix_checkpoints_each_completed_provider_call(tmp_path: Path) -> None:
