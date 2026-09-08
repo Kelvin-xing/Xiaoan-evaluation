@@ -96,9 +96,25 @@ def multimodel_transport(spec: Any, prompt: str) -> Mapping[str, Any]:
     if getattr(spec, "tier", "") == "judge":
         modules = envelope.get("stable_prefix", {}).get("modules", []) if envelope else []
         names = [str(item["name"]) for item in modules if isinstance(item, Mapping) and item.get("name")]
+        red_lines = envelope.get("stable_prefix", {}).get("red_lines", []) if envelope else []
+        red_line_ids = [str(item["id"]) for item in red_lines if isinstance(item, Mapping) and item.get("id")]
         schema = {
-            "type": "object", "additionalProperties": False, "required": ["dimensions"],
-            "properties": {"dimensions": {"type": "object", "additionalProperties": False, "required": names, "properties": {name: {"type": "integer", "enum": [0, 1, 2, 3]} for name in names}}},
+            "type": "object", "additionalProperties": False, "required": ["red_lines", "dimensions"],
+            "properties": {
+                "red_lines": {
+                    "type": "array", "minItems": len(red_line_ids), "maxItems": len(red_line_ids),
+                    "items": {
+                        "type": "object", "additionalProperties": False,
+                        "required": ["id", "triggered", "evidence"],
+                        "properties": {
+                            "id": {"type": "string", "enum": red_line_ids},
+                            "triggered": {"type": "boolean"},
+                            "evidence": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                },
+                "dimensions": {"type": "object", "additionalProperties": False, "required": names, "properties": {name: {"type": "integer", "enum": [0, 1, 2, 3]} for name in names}},
+            },
         }
         if use_anthropic and os.getenv("XIAOAN_CLAUDE_STRUCTURED_OUTPUT_MODE", "tool").strip().lower() != "off":
             body["tools"] = [{"name": "submit_judgement", "description": "Submit the complete XiaoAn matrix judgement.", "input_schema": schema}]
@@ -187,7 +203,9 @@ class XiaoAnChatflowTransport:
             "output_tokens": tokens.get("output"),
             "total_tokens": tokens.get("total"),
         } if isinstance(tokens, Mapping) else {}
-        return {"id": payload.get("response_id"), "text": payload.get("answer", ""), "usage": usage, "chatflow_debug": debug}
+        timings = debug.get("timings", {}) if isinstance(debug, Mapping) else {}
+        first_character_ms = timings.get("first_character_ms", timings.get("ttft_ms")) if isinstance(timings, Mapping) else None
+        return {"id": payload.get("response_id"), "text": payload.get("answer", ""), "usage": usage, "chatflow_debug": debug, "_xiaoan_first_character_ms": first_character_ms}
 
     def end_case(self, _spec: Any, _case_id: str) -> None:
         self._state().conversation_id = ""

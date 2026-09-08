@@ -52,7 +52,7 @@ def test_anthropic_explicit_cache_keeps_stable_and_dynamic_parts_separate(monkey
         def read(self):
             return json.dumps({
                 "id": "response-1",
-                "content": [{"type": "tool_use", "name": "submit_judgement", "input": {"dimensions": {}}}],
+                "content": [{"type": "tool_use", "name": "submit_judgement", "input": {"red_lines": [], "dimensions": {}}}],
                 "usage": {"input_tokens": 10, "output_tokens": 1},
             }).encode()
 
@@ -69,7 +69,7 @@ def test_anthropic_explicit_cache_keeps_stable_and_dynamic_parts_separate(monkey
     prompt = json.dumps({
         "xiaoan_prompt_contract": "matrix-judge-prompt/v1",
         "prompt_cache_key": "cache-key",
-        "stable_prefix": {"modules": []},
+        "stable_prefix": {"modules": [], "red_lines": []},
         "dynamic_input": {"answer": "dynamic answer"},
     })
 
@@ -79,14 +79,14 @@ def test_anthropic_explicit_cache_keeps_stable_and_dynamic_parts_separate(monkey
 
     body = captured["body"]
     assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-    assert json.loads(body["system"][0]["text"]) == {"modules": []}
+    assert json.loads(body["system"][0]["text"]) == {"modules": [], "red_lines": []}
     assert json.loads(body["messages"][0]["content"]) == {"answer": "dynamic answer"}
     assert prompt not in body["messages"][0]["content"]
     assert body["tool_choice"] == {"type": "tool", "name": "submit_judgement"}
-    assert body["tools"][0]["input_schema"]["required"] == ["dimensions"]
+    assert body["tools"][0]["input_schema"]["required"] == ["red_lines", "dimensions"]
     assert result["_xiaoan_attempt_count"] == 1
     assert result["_xiaoan_retry_errors"] == []
-    assert json.loads(result["text"]) == {"dimensions": {}}
+    assert json.loads(result["text"]) == {"red_lines": [], "dimensions": {}}
 
 
 def test_judge_requests_schema_constrained_json(monkeypatch) -> None:

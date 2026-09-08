@@ -30,6 +30,16 @@ from xiaoan_eval.cases import (
 )
 
 
+def _judge_json(rule, score: int, *, triggered: str | None = None) -> str:
+    return json.dumps({
+        "red_lines": [
+            {"id": item.id, "triggered": item.id == triggered, "evidence": []}
+            for item in rule.red_lines
+        ],
+        "dimensions": {module.name: score for module in rule.modules},
+    }, ensure_ascii=False)
+
+
 def test_default_matrix_has_ten_subjects_and_five_judges(tmp_path: Path) -> None:
     rule = load_rating_rule("ratings rule.yml")
     subjects = default_subject_specs()
@@ -58,7 +68,7 @@ def test_default_matrix_has_ten_subjects_and_five_judges(tmp_path: Path) -> None
         return {"text": "A" + prompt, "usage": {"prompt_tokens": 2, "completion_tokens": 3}}
 
     def judge(_spec, _prompt):
-        return {"text": json.dumps({"dimensions": {module.name: 3 for module in rule.modules}}, ensure_ascii=False), "usage": {"input_tokens": 4, "output_tokens": 5}}
+        return {"text": _judge_json(rule, 3), "usage": {"input_tokens": 4, "output_tokens": 5}}
 
     rows = run_matrix([{"id": "TC-01", "turns": [{"turn": 1, "user": "hello"}]}], subjects, judges, subject_transport=subject, judge_transport=judge, rating_rule=rule)
     assert len(subjects) == 10
@@ -70,6 +80,8 @@ def test_default_matrix_has_ten_subjects_and_five_judges(tmp_path: Path) -> None
     assert (tmp_path / "results.xlsx").exists()
     workbook = load_workbook(tmp_path / "results.xlsx", read_only=True)
     assert "Dimension_By_Judge" in workbook.sheetnames
+    assert "Judge_Agreement" in workbook.sheetnames
+    assert "Measurement_Contract" in workbook.sheetnames
     assert "dimension:基础能力" in next(workbook["All_Judgements"].iter_rows(values_only=True))
     pair_paths = write_pair_workbooks(rows, tmp_path / "pairs")
     assert len(pair_paths) == 50
@@ -91,7 +103,7 @@ def test_matrix_accepts_loaded_testcase_dataclasses() -> None:
     def judge(_spec, prompt):
         assert '"case_id": "TC-04"' in prompt
         assert '"turn": 1' in prompt
-        return {"text": json.dumps({"dimensions": {module.name: 2 for module in rule.modules}}, ensure_ascii=False)}
+        return {"text": _judge_json(rule, 2)}
 
     rows = run_matrix((case,), subjects, judges, subject_transport=subject, judge_transport=judge, rating_rule=rule)
     assert rows
@@ -114,7 +126,7 @@ def test_matrix_accepts_testcase_and_testturn_dataclasses_directly() -> None:
     rows = run_matrix(
         (case,), subjects, judges,
         subject_transport=lambda _spec, prompt: {"text": prompt},
-        judge_transport=lambda _spec, _prompt: {"text": json.dumps({"dimensions": {module.name: 1 for module in rule.modules}}, ensure_ascii=False)},
+        judge_transport=lambda _spec, _prompt: {"text": _judge_json(rule, 1)},
         rating_rule=rule,
     )
     assert rows[0]["case_id"] == "TC-DATACLASS"
@@ -254,6 +266,154 @@ def test_incomplete_judge_scores_are_unavailable() -> None:
     assert rows[0]["weighted_score"] is None
 
 
+def test_matrix_red_line_contract_zeroes_every_quality_dimension() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    rows = run_matrix(
+        ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "unsafe answer"},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 3, triggered=rule.red_lines[0].id)},
+        rating_rule=rule,
+    )
+    assert rows[0]["status"] == "PASS"
+    assert rows[0]["triggered_red_lines"] == (rule.red_lines[0].id,)
+    assert set(rows[0]["scores"].values()) == {0}
+    assert rows[0]["weighted_score"] == 0
+
+
+def test_matrix_requires_every_red_line_id_exactly_once() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    invalid = json.loads(_judge_json(rule, 2))
+    invalid["red_lines"] = invalid["red_lines"][:-1]
+    rows = run_matrix(
+        ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer"},
+        judge_transport=lambda *_args: {"text": json.dumps(invalid)},
+        rating_rule=rule,
+    )
+    assert rows[0]["status"] == "UNAVAILABLE"
+    assert rows[0]["weighted_score"] is None
+
+
+def test_matrix_rejects_non_string_red_line_evidence() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    invalid = json.loads(_judge_json(rule, 2))
+    invalid["red_lines"][0]["evidence"] = [123]
+    rows = run_matrix(
+        ({"id": "TC", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer"},
+        judge_transport=lambda *_args: {"text": json.dumps(invalid)}, rating_rule=rule,
+    )
+    assert rows[0]["status"] == "UNAVAILABLE"
+    assert rows[0]["scores"] == {}
+
+
+def test_matrix_marks_self_judging_outside_primary_denominator() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    rows = run_matrix(
+        ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "same", "latest", "medium"),),
+        (ModelSpec("gpt", "same", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer"},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)},
+        rating_rule=rule,
+    )
+    assert rows[0]["self_judging"] is True
+    assert rows[0]["primary_eligible"] is False
+
+
+def test_first_character_latency_is_only_copied_from_explicit_telemetry() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    subjects = (
+        ModelSpec("gpt", "with-ttfc", "latest", "medium"),
+        ModelSpec("claude", "without-ttfc", "latest", "medium"),
+    )
+    rows = run_matrix(
+        ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},), subjects,
+        (ModelSpec("qwen", "judge", "judge", "medium"),),
+        subject_transport=lambda spec, _prompt: ({"text": "answer", "_xiaoan_first_character_ms": 12.5} if spec.model == "with-ttfc" else {"text": "answer"}),
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)}, rating_rule=rule,
+    )
+    assert rows[0]["answer"]["first_character_ms"] == 12.5
+    assert rows[1]["answer"]["first_character_ms"] is None
+
+
+def test_matrix_optional_attribution_pass_is_bound_to_frozen_answer_snapshot() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    trace = {
+        "effective_context_snapshot": {
+            "schema_version": "effective-context-snapshot/v1", "snapshot_id": "snap-1",
+            "turn": 1, "context_kind": "BASELINE",
+            "router": {"status": "NOT_APPLICABLE", "units": []},
+            "composer": {"status": "INVOKED", "units": []},
+        }
+    }
+    seen = []
+
+    def attribution(request):
+        seen.append(request["assistant_answer"])
+        return json.dumps({
+            "contract_version": "attribution/v1",
+            "claims": [{
+                "claim_id": "c1", "kind": "SUPPORTIVE",
+                "answer_span": {"start": 0, "end": 6, "text": "answer"},
+                "relations": [{"relation": "UNSUPPORTED", "evidence_ref": None, "evidence_span": None}],
+                "unsupported_category": "NON_FACTUAL_SUPPORTIVE", "uncertainty": "LOW",
+            }],
+            "policies": [], "abstention": {"status": "ANSWERED", "reason": None},
+        })
+
+    rows = run_matrix(
+        ({"id": "TC", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer", "chatflow_debug": trace},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)},
+        rating_rule=rule, attribution_provider=attribution,
+    )
+    assert seen == ["answer"]
+    assert rows[0]["attribution"]["status"] == "AVAILABLE"
+    assert rows[0]["attribution"]["result"]["claims"][0]["claim_id"] == "c1"
+
+
+def test_invalid_attribution_is_unavailable_without_becoming_quality_zero() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    trace = {"effective_context_snapshot": {"schema_version": "effective-context-snapshot/v1", "snapshot_id": "snap", "turn": 1, "context_kind": "BASELINE", "router": {"status": "NOT_APPLICABLE", "units": []}, "composer": {"status": "INVOKED", "units": []}}}
+    rows = run_matrix(
+        ({"id": "TC", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer", "chatflow_debug": trace},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)},
+        rating_rule=rule, attribution_provider=lambda _request: "not-json",
+    )
+    assert rows[0]["status"] == "PASS"
+    assert rows[0]["weighted_score"] == pytest.approx(2)
+    assert rows[0]["attribution"]["status"] == "UNAVAILABLE"
+
+
+def test_matrix_collects_memory_lifecycle_from_structured_trace() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    case = {
+        "id": "TC-memory",
+        "memory_checkpoints": [{"after_turn": 1, "facts": ["has-child"], "usage": "use it"}],
+        "turns": ({"turn": 1, "user": "hello"},),
+    }
+    rows = run_matrix(
+        (case,), (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer", "chatflow_debug": {"state": {"memory_facts": ["has-child"], "memory_used": True, "memory_isolated": True, "memory_stale_or_unsafe": False}}},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)}, rating_rule=rule,
+    )
+    assert rows[0]["memory_metrics"][0]["status"] == "pass"
+    assert rows[0]["memory_metrics"][0]["isolated"] is True
+
+
 def test_matrix_checkpoints_each_completed_provider_call(tmp_path: Path) -> None:
     rule = load_rating_rule("ratings rule.yml")
     checkpoint = tmp_path / "nested" / "matrix-checkpoint.jsonl"
@@ -275,10 +435,7 @@ def test_matrix_checkpoints_each_completed_provider_call(tmp_path: Path) -> None
             ]
         judge_calls += 1
         return {
-            "text": json.dumps(
-                {"dimensions": {module.name: 2 for module in rule.modules}},
-                ensure_ascii=False,
-            )
+            "text": _judge_json(rule, 2)
         }
 
     rows = run_matrix(
@@ -380,7 +537,7 @@ def test_matrix_resume_ignores_only_a_truncated_final_record(tmp_path: Path) -> 
     expected = run_matrix(
         **common,
         subject_transport=lambda *_args: {"text": "answer"},
-        judge_transport=lambda *_args: {"text": json.dumps({"dimensions": {module.name: 3 for module in rule.modules}})},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 3)},
     )
     with checkpoint.open("a", encoding="utf-8") as target:
         target.write('{"event":"torn"')
@@ -438,7 +595,7 @@ def test_workbook_forces_untrusted_text_to_string(tmp_path: Path) -> None:
         (ModelSpec("gpt", "subject", "latest", "medium"),),
         (ModelSpec("gpt", "judge", "judge", "medium"),),
         subject_transport=lambda _spec, _prompt: {"text": "=1+1"},
-        judge_transport=lambda _spec, _prompt: {"text": json.dumps({"dimensions": {module.name: 3 for module in rule.modules}}, ensure_ascii=False)},
+        judge_transport=lambda _spec, _prompt: {"text": _judge_json(rule, 3)},
         rating_rule=rule,
     )
     path = tmp_path / "results.xlsx"
@@ -464,7 +621,7 @@ def test_matrix_runs_judges_concurrently_and_keeps_declared_order() -> None:
         time.sleep(0.03)
         with lock:
             active -= 1
-        return {"text": json.dumps({"dimensions": {module.name: 2 for module in rule.modules}})}
+        return {"text": _judge_json(rule, 2)}
 
     rows = run_matrix(
         ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
@@ -516,7 +673,7 @@ def test_matrix_runs_subject_case_lanes_concurrently_but_turns_stay_sequential()
         (ModelSpec("gpt", "subject", "latest", "medium"),),
         (ModelSpec("gpt", "judge", "judge", "medium"),),
         subject_transport=Subject(),
-        judge_transport=lambda *_args: {"text": json.dumps({"dimensions": {module.name: 2 for module in rule.modules}})},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)},
         rating_rule=rule,
         subject_concurrency=2,
         max_in_flight=2,
@@ -528,6 +685,31 @@ def test_matrix_runs_subject_case_lanes_concurrently_but_turns_stay_sequential()
     assert [(row["case_id"], row["turn"]) for row in rows] == [
         ("TC-0", 1), ("TC-0", 2), ("TC-1", 1), ("TC-1", 2)
     ]
+
+
+def test_matrix_finishes_all_subject_answers_before_any_judge_call() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    events = []
+    cases = (
+        {"id": "TC-1", "turns": ({"turn": 1, "user": "one"},)},
+        {"id": "TC-2", "turns": ({"turn": 1, "user": "two"},)},
+    )
+
+    def subject(_spec, prompt):
+        events.append(("subject", prompt))
+        return {"text": f"answer:{prompt}"}
+
+    def judge(_spec, _prompt):
+        events.append(("judge", None))
+        assert sum(kind == "subject" for kind, _ in events) == 2
+        return {"text": _judge_json(rule, 2)}
+
+    run_matrix(
+        cases, (ModelSpec("gpt", "subject", "latest", "medium"),),
+        (ModelSpec("claude", "judge", "judge", "medium"),),
+        subject_transport=subject, judge_transport=judge, rating_rule=rule,
+    )
+    assert [kind for kind, _ in events] == ["subject", "subject", "judge", "judge"]
 
 
 def test_matrix_limits_same_provider_calls() -> None:
@@ -544,7 +726,7 @@ def test_matrix_limits_same_provider_calls() -> None:
         time.sleep(0.02)
         with lock:
             active -= 1
-        return {"text": json.dumps({"dimensions": {module.name: 2 for module in rule.modules}})}
+        return {"text": _judge_json(rule, 2)}
 
     run_matrix(
         ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
@@ -573,7 +755,7 @@ def test_matrix_resume_reuses_completed_lanes(tmp_path: Path) -> None:
     first = run_matrix(
         **args,
         subject_transport=lambda *_args: {"text": "answer"},
-        judge_transport=lambda *_args: {"text": json.dumps({"dimensions": {module.name: 3 for module in rule.modules}})},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 3)},
     )
 
     second = run_matrix(
@@ -630,7 +812,7 @@ def test_matrix_resume_reuses_judgement_written_before_cell(tmp_path: Path) -> N
     first = run_matrix(
         **args,
         subject_transport=lambda *_args: {"text": "answer"},
-        judge_transport=lambda *_args: {"text": json.dumps({"dimensions": {module.name: 3 for module in rule.modules}})},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 3)},
     )
     events = [json.loads(line) for line in checkpoint.read_text(encoding="utf-8").splitlines()]
     checkpoint.write_text(
@@ -655,7 +837,7 @@ def test_matrix_resume_rejects_changed_case_contract(tmp_path: Path) -> None:
         subjects=(ModelSpec("gpt", "subject", "latest", "medium"),),
         judges=(ModelSpec("gpt", "judge", "judge", "medium"),),
         subject_transport=lambda *_args: {"text": "answer"},
-        judge_transport=lambda *_args: {"text": json.dumps({"dimensions": {module.name: 3 for module in rule.modules}})},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 3)},
         rating_rule=rule,
         checkpoint_path=checkpoint,
     )
@@ -677,7 +859,7 @@ def test_matrix_retains_prompt_cache_usage() -> None:
         (ModelSpec("gpt", "judge", "judge", "medium"),),
         subject_transport=lambda *_args: {"text": "answer"},
         judge_transport=lambda *_args: {
-            "text": json.dumps({"dimensions": {module.name: 2 for module in rule.modules}}),
+            "text": _judge_json(rule, 2),
             "usage": {"input_tokens": 100, "output_tokens": 5, "input_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10}},
         },
         rating_rule=rule,
@@ -696,7 +878,7 @@ def test_matrix_normalizes_anthropic_prompt_cache_usage() -> None:
         (ModelSpec("claude", "judge", "judge", "medium"),),
         subject_transport=lambda *_args: {"text": "answer"},
         judge_transport=lambda *_args: {
-            "text": json.dumps({"dimensions": {module.name: 2 for module in rule.modules}}),
+            "text": _judge_json(rule, 2),
             "usage": {
                 "input_tokens": 100,
                 "output_tokens": 5,
@@ -726,7 +908,7 @@ def test_workbook_stores_each_answer_once_and_links_judgements(tmp_path: Path) -
             "chatflow_debug": _trace_with_large_duplicate_context(),
         },
         judge_transport=lambda _spec, _prompt: {
-            "text": json.dumps({"dimensions": {module.name: 3 for module in rule.modules}}, ensure_ascii=False)
+            "text": _judge_json(rule, 3)
         },
         rating_rule=rule,
     )

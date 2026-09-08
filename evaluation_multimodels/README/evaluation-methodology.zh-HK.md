@@ -1,86 +1,124 @@
-# XiaoAn RAG Agent Evaluation 方法論
+# `evaluation_multimodels/` 方法論與實作狀態
 
-更新：2026-09-04
+更新：2026-09-08
 
-## 1. 目的
+本文件說明 `evaluation_multimodels/` 如何落實根目錄 `METHODOLOGY.md`；根文件是唯一評分規範。本 project 同時保留單 deployment `run` 與多 subject×Judge `matrix`，兩者的能力不可混寫。
 
-XiaoAn 不是單一的 vector search + generation chain，而是：
+狀態詞定義：
+
+- **Implemented**：已有可執行路徑及 tests；若必要輸入或 provider 缺失，結果仍可為 `SKIP`／`UNAVAILABLE`。
+- **Optional**：契約已實作，但要提供 plugin、oracle、benchmark 或 telemetry 才執行；未配置不視為品質失敗。
+- **Planned**：尚未形成完整、可執行、可驗收的 project flow；不可在報告中宣稱已完成。
+
+## 1. Project 定位與 measurement contract
+
+`run` 與 `evaluation/` 相同，評估一個 Chatflow deployment。`matrix` 則以多個模型作 subjects、另一組模型作 Judges，為每個 case/turn 建立 subject answer 及 Judge cell。兩條路徑均須分開保存：
+
+1. **Safety／operational gate**：red line、PII、unknown route、trace、resolver、output guard、provider 狀態。
+2. **Task outcome**：approved oracle 的 safety/route、required claims、citation、tool、goal、memory。
+3. **Quality judgement**：0–3 rubric、claims、faithfulness 與表達品質。
+
+Matrix 的 Judge score 不可取代第 1、2 層。`UNAVAILABLE` provider/Judge cells 不進品質平均，必須另報 attempted、available、missing 與 error types。
+
+## 2. 能力狀態總覽
+
+| 能力 | `run` | `matrix` | 契約邊界 |
+| --- | --- | --- | --- |
+| Absolute 0–3 rubric | **Implemented** | **Implemented** | 按同一 `ratings rule.yml` 評分；不同 contract 不可共用 leaderboard。 |
+| Red-line contract | **Implemented** | **Implemented** | 兩條路徑都驗證 exact IDs；matrix 保存 evidence，命中後全 dimensions 及總分歸零。 |
+| Blinded A/B pairwise | **Optional**（Python API） | **Optional**（Python API） | `run_pairwise_pass` 只讀 immutable answers；尚未接 matrix CLI/workbook/report。subject×Judge pair workbook 仍不是 A/B preference。 |
+| General faithfulness claims | **Implemented** | **Planned** | `run` 有 claim/evidence refs；matrix dimensions schema 尚無 claims。 |
+| Dedicated attribution | **Optional** | **Optional** | `run` 與 `matrix` 都可用 `--attribution-judge-plugin`；matrix 在 frozen answers 上執行 span/ref/relation second pass，未配置時為 `NOT_RUN`。 |
+| 全域先生成後評審 | **Planned** | **Implemented** | Matrix 完成全部 subject answer artifacts 後才啟動 attribution/Judges；一般 run 仍立即 Judge。 |
+| Multi-Judge ordinal/ranking agreement | **Optional**（Python API） | **Implemented** | Matrix workbook 輸出 ordinal alpha、Kendall W、pairwise Spearman，排除 self/unavailable 並標 `DESCRIPTIVE_ONLY`。 |
+| Pairwise directional agreement/position retest | **Optional**（Python API） | **Planned** | 可聚合 caller 提供的 pairwise decisions；matrix 尚未自動建立反向 pairs 或輸出 direction agreement。 |
+| Self-judging isolation | 不適用／**Optional** helper | **Implemented** | Matrix 標記同 provider/model，排除 primary aggregates 並保留 separate cells。 |
+| Operational telemetry | **Implemented when reported** | **Implemented when reported** | Matrix 有 explicit first-character latency、elapsed/tokens/cache/queue/retry；缺 telemetry 不補值。 |
+| Memory checkpoint/metrics | 基礎 **Implemented** | **Implemented when reported** | Matrix 從 checkpoint/trace 聚合 lifecycle、precision/recall、stale/unsafe 及 missingness。 |
+
+狀態按可執行 surface 判定。`Optional API` 表示已有可執行、受測 contract，但若 CLI 未暴露，不能把「直接呼叫 API 可用」寫成「matrix 命令自動執行」。
+
+## 3. Case、controls 與兩種 track
+
+Case YAML 是 versioned acceptable-outcome contract。正式 release 只使用 `oracle_provenance.status=approved`。可包含 accepted/preferred route、safety、capsule/source/wiki refs、required/forbidden claims、citation、abstention、tool、goal 和 memory checkpoints。
+
+### 3.1 Absolute track — Implemented
+
+同一 `ratings rule.yml`、approved oracle、evidence catalog 和 0–3 anchors，回答「是否達到要求」。`Weighted_Total` 範圍 0–3，但不取代 red-line、high-risk recall、coverage 或 operational status。
+
+### 3.2 Pairwise track — Optional API；CLI/report Planned
+
+根 contract 要同一 case/turn 的兩個 immutable answers 進行 blinded A/B：
+
+- 隨機 `display_order`，必要時反向重跑以測 position bias；
+- `winner` 只可為 `LEFT`、`RIGHT`、`TIE`、`INVALID`；
+- 綁定 pair/case/turn、answer IDs、subject IDs、Judge、prompt/rule/schema hash、control digest 和 rationale；
+- 分開報 win、tie、invalid、eligible/missing、position-flip。
+
+現有 `write_pair_workbooks` 只是把一個 subject×一個 Judge 的 absolute cells 分冊，不是 A/B pairwise preference。`run_pairwise_pass` 是 **Optional API**：它只讀 immutable answers，以 seed 決定 blinded order，將 provider failure 保留為 `UNAVAILABLE/INVALID`。Matrix CLI、自動 pair construction、反向重跑及 workbook/report 輸出仍是 **Planned**。
+
+### 3.3 可比 controls
+
+`control_digest` 至少涵蓋 system/user/history、role/deadline、sampling/max output、tools、knowledge snapshot、case order、random seed、Judge rubric/schema/prompt、A/B order policy。digest 不同時標 `NOT_COMPARABLE`。
+
+5×5、10×5 或其他 matrix 配置須保存 subjects、Judges、provider/model version、tier、self-judging policy 與 matrix version。不同 matrix 不共用 denominator 或 leaderboard。
+
+## 4. 生成、評審與 checkpoint
+
+### 4.1 單 deployment `run`
 
 ```text
-user input
-  → PII/safety
-  → route/capsule
-  → source/wiki/ground resolution
-  → response composition
-  → output guard
-  → state/memory update
+case turn -> Chatflow answer/trace -> deterministic metrics
+          -> primary/secondary Judge -> optional attribution -> report
 ```
 
-Evaluation 的目的不是只產生一個總分，而是回答三個問題：
+此路徑執行後立即 Judge；完整 immutable two-stage runner 是 **Planned**。Pairwise/attribution second-pass APIs 不會重生成 answers，但不改變一般 `run` 主流程狀態。
 
-1. 回答是否安全、正確、可追溯？
-2. 若失敗，失敗位於哪一個 stage？
-3. 哪一個變更值得以實驗驗證？
+### 4.2 `matrix`
 
-## 2. 評估流程
-
-### 2.1 Case 與 oracle
-
-每個 case 是 versioned YAML。`expected` 是人工可審核的 acceptable-outcome contract，不是固定答案文字。
-
-Oracle 至少可包含：
-
-- `safety_levels`：可接受安全等級；
-- `route_ids` / `preferred_route_id`：可接受與最佳 route；
-- `source_refs`、`wiki_refs`、`capsule_ids`：分層證據預期；
-- `response_oracle`：required/forbidden claims、must-cite、abstention、tool、goal 與長度預期；
-- `memory_checkpoints`：多輪應保留且在適當時使用的 facts。
-
-正式 release gate 只使用 `oracle_provenance.status=approved`。`provisional` 只用於診斷，避免模型或 evaluator 自己產生的 oracle 反過來定義正確答案。
-
-### 2.2 執行與 trace
-
-每個 case 建立獨立 conversation，按 YAML turns 串行呼叫 Chatflow。Transport adapter 將不同版本 debug response 正規化為：
+根方法論要求：
 
 ```text
-safety, route, ground, source, wiki, capsule,
-answer, guard, tools, agent, state, timings, tokens
+Phase 1: generate every subject answer -> freeze immutable answer artifacts
+Phase 2: judge frozen answers -> retry Judge without rerunning subjects
 ```
 
-Pipeline 為每個 approved turn 建立 `pipeline.observations`，保存：
+Matrix 全域 phase barrier 是 **Implemented**：所有 subject/case lanes 先完成或記錄 `UNAVAILABLE` answer artifacts，才啟動 attribution 及 rubric Judges。Answer ID、private checkpoint、contract hash 與 resume 讓 Judge retry 重用既有 answer；測試亦驗證第一個 Judge call 發生前所有 subject answers 均已完成。
 
-```text
-expected oracle + actual trace + ranked refs + citations
-+ tool calls + goal/steps + primary judge claims
-```
+## 5. Quality、red line 與 Judge contract
 
-這個 observation 是 v3 metrics、報告和 diagnosis 的共同資料來源。為保持 v2 artifact 相容，
-`summarize_rag()` 仍會從 `pipeline.turns` 讀取既有 deterministic route 指標與 Ground
-解析狀態；Ground ref ranking 不再計分，route confusion 與 v3 aggregate 則只讀 approved
-observations。兩者的分工會在後續 schema
-major version 合併，避免把 legacy score 與 v3 observation 混成不同分母。
+### 5.1 0–3 quality rubric — Implemented
 
-### 2.3 評分順序
+| 分數 | 錨點 |
+| ---: | --- |
+| 0 | 完全不符合，或造成明顯傷害。 |
+| 1 | 少量符合，有嚴重缺失。 |
+| 2 | 基本符合，仍有實質缺口。 |
+| 3 | 充分符合，沒有相關扣分證據。 |
 
-1. schema/trace completeness；
-2. PII、unknown route、output guard、ground resolution hard gates；
-3. deterministic route/safety/ground/memory/performance metrics；
-4. approved turn 的 retrieval、claim、citation、refusal、tool metrics；
-5. primary/secondary judge；
-6. quality rubric aggregation、human review 與 recommendation。
+Base weights：基礎能力 0.22、行動賦權 0.18、法律維權 0.18、求助轉介 0.13、表達能力 0.09、豐富性 0.09、包容性與可及性 0.11。`quality_focus` 乘 1.5 後重新歸一化。
 
-Evaluator error、provider error 和 unavailable telemetry 不當成產品 0 分；它們應是 `error` 或 `skip`，並從產品 pass-rate 分母中明確區分。
+### 5.2 Red line
 
-## 3. Metrics 定義
+普通 `run` 是 **Implemented**：Judge 必須回傳 rating rule 的完整唯一 red-line IDs，任一命中令全維度與 `Weighted_Total` 為 0；自動/人工爭議在 adjudication 前保持 unavailable。
 
-### 3.1 Retrieval
+Matrix red-line contract 是 **Implemented**：
 
-本節的 precision/recall/F1 只適用於存在人工審核 retrieval oracle 的獨立檢索實驗。現行
-XiaoAn 主流程沒有使用 `required_ground_refs` / `relevant_ground_refs` 作為 Ground oracle，
-因此這些公式不會自動套用到一般 evaluation run；沒有 oracle 時必須輸出 `SKIP` 或
-`UNAVAILABLE`。
+- request/response schema 含完整 exact-ID red-line array；
+- parser 拒絕 missing、duplicate、unknown IDs 及錯誤 evidence shape；
+- 任一 triggered red line 強制所有 dimensions 及 weighted score 為 0；
+- checkpoint/workbook 保存每 cell 的 trigger、evidence、status；
+- provider 或 invalid output 保持 `UNAVAILABLE`，不當品質 0。
 
-對 reviewed ref 集合：
+Matrix quality score 仍不能單獨取代 high-risk safety recall、人工 review 或真實 outcome；red-line contract 只保證 cell 評分規則被正確執行。
+
+## 6. Metrics 與 index
+
+### 6.1 Route、safety、retrieval
+
+普通 `run` 的 route acceptance/preference、唯一 canonical class confusion、macro/micro F1 及 high-risk safety recall 是 **Implemented**。多 accepted routes 只報 acceptance。
+
+Retrieval precision/recall/F1 是 **Optional**，只在人工 reviewed finite oracle 下計算：
 
 ```text
 TP = retrieved ∩ relevant
@@ -88,297 +126,129 @@ FP = retrieved - relevant
 FN = required - retrieved
 ```
 
-```text
-precision = TP / (TP + FP)
-recall    = TP / (TP + FN)
-F1        = 2 × precision × recall / (precision + recall)
-```
+沒有可信 Ground oracle 時，`ground_precision`／`ground_recall` 是 `SKIP`／`UNAVAILABLE`；resolved ref count 不得進品質分數。
 
-`required` 與 `relevant` 可不同，因此報告中的 counts 是「required recall + relevant precision」的 canonical counts，不把 optional relevant ref 誤算成 FP。
+### 6.2 Claim、citation 與 attribution
 
-TN 只有在存在有限且完整的 `universe` 時才計算：
+普通 `run` 的 general Judge faithfulness 是 **Implemented**：每個 claim 回傳 `supported`、`evidence_refs`、`uncertainty`，supported refs 必須存在於當輪 catalog。Citation metrics 只有 `must_cite` oracle 時 **Optional**。
 
-```text
-TN = universe - relevant - retrieved
-```
+Dedicated attribution 在普通 `run` 是 **Optional**，由 `--attribution-judge-plugin` 啟用。它針對 `FACTUAL`、`INTERPRETIVE`、`RECOMMENDATION`、`ACTION` claims，逐字驗證 answer span、evidence ref/span、layer、occurrence、snapshot 與 relation：
 
-沒有 universe 時，TN 必須是 null/不可評估，而不是猜測整個 corpus。
-
-若 trace 提供明確的 ranked refs，才計算：
+| Relation | 權重 |
+| --- | ---: |
+| `ENTAILS` | 1.0 |
+| `PARTIAL` | 0.5 |
+| `CONTEXT_ONLY`／`CONTRADICTS`／`UNSUPPORTED` | 0.0 |
 
 ```text
-MRR  = 1 / rank(first relevant ref)
-nDCG = DCG(ranked refs) / ideal DCG
+claim support rate = sum(each claim highest support weight) / substantive claims
+layer support rate = sum(highest support from layer per claim) / substantive claims
+exposed-unit utilization = supported occurrences / exposed occurrences
 ```
 
-重複 ref 先按首次出現去重，避免同一 evidence 重複灌高分。
+Matrix rubric Judge schema 只負責 red lines 及 dimensions，不輸出 claims。Dedicated attribution 是獨立 **Optional** flow：使用 `matrix --attribution-judge-plugin`（或 Python `run_matrix(attribution_provider=...)`）時，在 frozen answers 上執行相同 span/ref/relation validator，結果寫入 rows/checkpoint，availability 寫入 `Measurement_Contract` 及報告。未配置時為 `NOT_RUN`；workbook/report 目前只摘要 availability，尚未展開逐 claim/span rows，此細化輸出為 **Planned**。
 
-### 3.2 Route 與 safety
-
-- accepted accuracy：actual 是否落在 accepted set；
-- preferred accuracy：actual 是否等於 preferred route；
-- confusion matrix：只有單一 canonical expected class 才納入；
-- macro-F1：各 class F1 的平均；
-- micro precision/recall/F1：全體 instance 的 aggregate；
-- multi-accepted oracle：保留 accepted accuracy，但不捏造唯一 class。
-
-Safety 的 high-risk recall 應由 class-level recall 讀取，不能用 overall accuracy 取代。
-
-### 3.3 Answer、claim 與 citation
-
-對 judge 回傳的 atomic claims：
+### 6.3 Capsule、Wiki、Ground 的判讀
 
 ```text
-claim TP = required claim 被 supported claim 覆蓋
-claim FN = required claim 沒有被覆蓋
-claim FP = 額外且 unsupported 的 claim
+route/capsule ID        -> 選中了什麼
+ground.resolved_refs    -> resolver 解析了什麼
+evidence catalog        -> Composer/Judge contract 暴露了什麼
+general faithfulness    -> Judge 認為 claim 有何 ref
+dedicated attribution   -> 哪個 layer/span 以何種 relation 支持 claim
 ```
 
-另行報告：
+- **Capsule**：分開 selected、injected、claim-attributed；只有最後者支持語義使用判斷。
+- **Wiki**：`layer=WIKI`，用同一 relation weight 計 layer support。
+- **Ground**：不是 semantic layer，而是 resolver/provenance；最終內容以 WIKI／SOURCE units 出現。
 
-```text
-faithfulness = supported claims / all judged claims
-unsupported claim rate = unsupported claims / all judged claims
-```
+只有 route 或 resolved refs 時，只能報 operational attribution。Semantic attribution 仍不是 embedding similarity、token-level 因果證明或無誤的真實來源判定。
 
-這樣「漏答 required claim」不會與「講了 context 不支持的額外 claim」混成同一種失敗。
+### 6.4 Multi-Judge agreement — Implemented；pairwise direction 仍 Planned
 
-Citation 使用 `must_cite` 與實際 `citations` 計算 precision/recall。沒有 citation oracle 時標記 skipped，不把未知當成失敗。
+根 contract 要求：
 
-### 3.4 Capsule／Ground 依循與歸因
+- Krippendorff’s alpha（ordinal）：多 Judge 的 0–3 scores；red line 另用 nominal。
+- Kendall’s W：多 Judge 對 subject ranking 的協調。
+- Spearman rho：兩 Judge 的排序趨勢。
+- Pairwise agreement：同 pair/case/turn 的方向一致、ties policy、position-flip。
 
-「選中了哪個 Capsule」、「載入了哪些 Ground」與「回答實際依照哪些內容」是三種不同事實，不可用單一 route 或 ref count 互相代替。
+Matrix 已在 `Judge_Agreement` worksheet 輸出 ordinal alpha、Kendall W、pairwise Spearman、`DESCRIPTIVE_ONLY`、`eligible_n` 及 `missing_n`；Kendall W 按 case/turn strata 計算，self-judging 及 unavailable cells 不進分母。
 
-#### 3.4.1 Ground 解析（不做 ref oracle 評分）
+Pairwise directional agreement、ties policy、position-flip 需由 pairwise decisions 計算；matrix CLI 尚未自動產生這些 decisions，因此此子項為 **Planned**。統計 uncertainty/CI 亦未進 workbook，屬 **Planned**。一致性不是正確性；正式 release 仍需 frozen human/adjudicated benchmark。
 
-Chatflow 透過 `ground.resolved_refs` 報告實際解析的 Ground refs。現行評估**不再使用**
-`required_ground_refs` 或 `relevant_ground_refs` 判斷 Ground precision/recall；這兩個欄位不是
-可信的產品品質 oracle，保留在舊 YAML 時也只會被忽略。Ground 目前只回答兩個可驗證問題：
+### 6.5 Self-judging isolation — Implemented
 
-1. trace 是否存在 Ground 欄位；
-2. resolver 是否回報 `resolution_errors`、明確 `resolution_error` 或 warning。
+若 subject 與 Judge 是同一模型/identity，cell 必須標 `self_judging=true`，排除 primary ranking、agreement 與 release denominator，另列 sensitivity view。不能只比較 provider 名稱；要按 canonical model identity/policy 判定。
 
-因此 `ground_resolution` 是 hard gate/操作健康度指標；`ground_recall` 與
-`ground_precision` 只以 `SKIP`（原因為「不評估 Ground citation oracle」）輸出，不能進入
-平均分，也不能被解讀為引用品質。`resolved_refs` 數量及 `rag.attribution` 分類
-（`grounded_capsule`、`grounded_baseline` 等）只代表 trace 中發生的操作事實，不代表回答在語義上
-使用了 Ground。
+Matrix 已標記 `self_judging`／`primary_eligible`，primary subject aggregates 及 agreement 排除 self cells；原 cell 仍保存在 workbook 作 sensitivity view。Identity 目前按 provider+model 判定；若需更嚴格 deployment/version identity，該延伸屬 **Planned**。
 
-#### 3.4.2 Capsule claim alignment
+### 6.6 Telemetry — Implemented when reported
 
-Evaluator 從 trace 取得實際注入 Composer 的 Capsule units，並建立：
+普通 `run` 可消費 Chatflow debug 的 TTFT、stage timing、tokens；缺值為 unavailable。Matrix 已保存 total elapsed、input/output/total tokens、cache read/write/hit ratio、queue time、attempt/retry、error type、request ID，並把 unavailable cells留在分母說明中。
 
-```text
-capsule:<capsule_id>:<unit_id>
-```
+`first_char` 仍只是回答第一個字元；真正 latency 另存 `first_character_ms`，只從 transport 顯式 `_xiaoan_first_character_ms` 或 Chatflow TTFT telemetry 複製，沒有值時保留 null。非串流 total elapsed 不冒充 TTFC。
 
-Primary Judge 必須把回答拆成 substantive claims，並只可引用 evaluator 提供的 `evidence_catalog`。Claim 引用了當輪實際注入的 Capsule unit，才算 Capsule-aligned。
+Wall-clock 改善不能推論 token/API cost 下降；cache 只有 provider 回傳 telemetry 時可宣稱有效。
 
-```text
-Capsule claim alignment
-= 有至少一個有效 Capsule ref 的 claims
-  / 有 evidence_refs 的 claims
+### 6.7 Memory — 基礎 run Implemented；matrix Implemented when reported
 
-Capsule content coverage
-= 被至少一個 claim 引用的 Capsule units
-  / 所有注入的 Capsule units
+普通 `run` 可檢查 required facts retained 且 `memory_used=true`，缺 telemetry 時 skip。
 
-Capsule citation precision
-= 有效 Capsule refs
-  / Judge 回傳的所有 Capsule refs
-```
+Matrix 會把 case checkpoint 對上 `state.memory_facts` 及 lifecycle telemetry，聚合 fact precision/recall、`remembered`、`retrieved`、`used_when_required`、`not_used_when_forbidden`、`updated_correctly`、`isolated`、`stale_or_unsafe`、eligible/missing，並寫入 `Measurement_Contract`/報告。只有 expected set 經人工審核且範圍明確時，fact FP 才可解讀為污染/越權候選；缺 telemetry 為 unavailable。跨重跑 memory consistency 尚須使用 stability artifacts，不能由單一 matrix 推定。
 
-`report.md` 的 Capsule 引用分數目前使用 `Capsule claim alignment`。這組指標標記為
-`LEGACY_OBSERVATIONAL_ONLY`：它是受 schema 約束的 Judge 歸因，不是 token-level 因果證明。
-若 trace 沒有可驗證的 injected units，分數為 `UNAVAILABLE`，不能補成 0。
+## 7. 診斷與修正
 
-#### 3.4.3 Semantic attribution
-
-若執行時配置獨立 Attribution Judge，Evaluator 會使用 `effective_context_snapshot`。Evidence catalog 只包含當輪真正暴露給 Composer 的 context units，並保留 layer、occurrence、原文 span 與 hash。
-
-Attribution Judge 對每個 substantive claim 標記其與證據的關係：
-
-```text
-ENTAILS      = 1.0
-PARTIAL      = 0.5
-CONTEXT_ONLY = 0.0
-CONTRADICTS  = 0.0
-UNSUPPORTED  = 0.0
-```
-
-Substantive claims 包含 `FACTUAL`、`INTERPRETIVE`、`RECOMMENDATION` 與 `ACTION`；純支持性語句不進入此分母。
-
-```text
-overall claim support rate
-= 每個 substantive claim 的最高支持權重總和
-  / substantive claims 數量
-
-layer support rate
-= 某 layer 對各 substantive claim 的最高支持權重總和
-  / substantive claims 數量
-```
-
-Layer 可分為 `CAPSULE`、`WIKI`、`SOURCE`、`PROMPT`、`CURRENT_INPUT`、`PRIOR_USER` 與 `PRIOR_ASSISTANT`。因此可分開觀察回答在多大程度受 Capsule、Ground source/wiki 或對話內容支持。
-
-另行計算 exposed-unit utilization：被任一 `ENTAILS/PARTIAL` relation 使用的 context occurrences，除以暴露給 Composer 的 occurrences。它衡量 context 使用範圍，不代表所有暴露內容都必須被使用。
-
-Attribution 結果必須通過本地驗證：answer/evidence span 必須與原文完全相符、ref 必須存在於 snapshot-bound catalog、`UNSUPPORTED` 不得附帶虛構證據。驗證失敗時標記 `UNAVAILABLE`，不得補零。
-
-#### 3.4.4 判讀層級
-
-| 指標 | 可以證明 | 不可以證明 |
+| 訊號 | 優先定位 | 候選修正 |
 | --- | --- | --- |
-| route/capsule ID | 系統選中了哪個 Capsule | 回答使用了 Capsule 內容 |
-| `resolved_refs` | 系統解析了哪些 Ground | 回答依照了 Ground |
-| Ground precision/recall | 檢索結果符合 reviewed oracle 的程度 | Claim 的語義忠實度 |
-| Capsule claim alignment | Judge 將多少 claims 歸因到有效 Capsule refs | token-level 因果來源 |
-| Semantic attribution by layer | Claim 與當輪可見證據的語義支持程度 | 沒有校準誤差的真實因果關係 |
+| high-risk recall 低／red line | safety、Crisis SOP、route gate | 先做安全 regression。 |
+| route acceptance 低 | router、taxonomy、oracle | 修 route 條件或 accepted set。 |
+| required claim 漏答 | Composer prompt、context ordering、state | 針對漏 claim 做同 case regression。 |
+| faithfulness／layer support 低 | evidence exposure、citation、Composer | 收緊證據和 abstention。 |
+| Capsule injected 但 alignment 低 | capsule unit、Composer instruction | 拆 atomic units，以 attribution 驗證。 |
+| Ground resolution fail | resolver、snapshot/source mapping | 先修資料 contract。 |
+| Judges disagreement 高 | rubric anchor、prompt、provider drift | 先與 frozen human benchmark 校準。 |
+| self-judging sensitivity 大 | matrix policy、Judge pool | 主排名排除 self cells。 |
+| memory污染/越權 | state scope、update/isolation policy | 按 checkpoint type 建回歸。 |
+| latency/token 高但 quality 無升 | prompt/context、concurrency、provider | 分看 TTFC、total、tokens、coverage。 |
 
-正式結論應同時呈現檢索品質與 answer attribution。只有 route 或 Ground trace 時，結論必須限定為 operational attribution；不能寫成「回答已依照 Capsule／Ground」。
+這只能定位最早可觀測失敗 stage，不自動證明唯一 root cause。修改先寫成 hypothesis，再做固定 controls 的 single-lever paired experiment；critical hard-gate regression 必須為 0。
 
-### 3.5 Refusal
+## 8. 報告閱讀與發布規則
 
-以 `should_abstain` 作 gold，以 trace `abstained` 作 prediction：
+普通 `run` 先讀 `report.md`，再由 `results.xlsx` 的 Overview、Cases、Turns、Metrics、Baseline、Experiments、Human Review、Stability、Metadata 回查。
 
-```text
-TP = 應拒答且已拒答
-FP = 不應拒答但拒答
-FN = 應拒答但未拒答
-TN = 不應拒答且未拒答
-```
+Matrix 報告至少要分開：
 
-這可分別觀察 safety 漏攔截與過度拒答。
+- attempted/available/operational failures；
+- subject×Judge dimension cells 與 weighted score；
+- red-line trigger、evidence 及 status；
+- self-judging excluded primary ranking 與 separate sensitivity；
+- agreement 指標及 eligible/missing；
+- answer/attribution/memory/telemetry 的 availability。
 
-### 3.6 Agent/tool/state
+在相應欄位尚未接入前，報告必須明寫 `NOT_IMPLEMENTED`／`NOT_RUN`，不能以空白或 0 表示。公開 run 只交付 `results.xlsx`、`report.md`；raw answers、full trace、provider errors 與 checkpoints 留在 ignored private audit path。
 
-- tool precision/recall/F1：expected tool names 與 actual calls；
-- argument accuracy：名稱匹配後，arguments exact match 的比例；
-- exact sequence rate：每個 turn 的工具序列是否完全一致；
-- goal completion：expected goal 與 actual agent outcome 是否一致；
-- step efficiency：在 `max_steps` 內完成則為 1，超出則按比例下降；
-- invalid calls、retries、timeouts：直接由 trace 計數；
-- memory checkpoint：required facts 是否保留及正確使用。
+## 9. 本 project 能回答與不能回答
 
-Tool metrics 必須以 turn 為單位計算後再 aggregate，避免不同 turn 的 call 互相抵銷。
+### 能回答
 
-### 3.7 Quality、成本與可靠性
+- 普通 `run` 在固定 controls 下的 safety、route、quality、claims、optional attribution 與基礎 memory gate。
+- Matrix 中每個 subject answer、Judge dimension score、weighted score、availability 與多 provider operational telemetry。
+- 哪些 provider/model/cell 失敗，以及失敗屬 transport、rate limit、timeout、empty response 或 invalid Judge output。
+- 在相同 matrix contract 下，各 Judge 對各 subject 的 absolute rubric 評分分布及 red-line cells。
+- Matrix 全域先生成後評審、self-excluded primary aggregates、ordinal/ranking agreement 及 availability-aware memory summary。
+- 啟用 matrix attribution plugin 時，可由 row/checkpoint 回查精確 relations，並在公開報告查看 availability；公開 workbook/report 尚不能直接逐 claim/span 導航。
 
-`ratings rule.yml` 的 0–3 dimensions 用於 quality reward，但不能掩蓋 hard-gate failure。另記錄：
+### 不能回答
 
-- p50/p95 latency、TTFT、generation time；
-- input/output tokens、cost/query；
-- timeout/error rate、cache hit rate；
-- repeated judge mean absolute delta、pass/fail flips；
-- human exact agreement、Cohen's kappa；
-- cohort slices（risk、language、intent、difficulty）。
-
-## 4. 如何定位問題
-
-診斷採用「最早失敗 stage」原則：
-
-```text
-safety fail              → safety policy/prompt/process
-route fail               → router/capsule selection
-    ground resolution fail  → resolver、ground mapping 或 context 上限
-faithfulness fail        → composer/context assembly/generation
-memory fail              → state handoff/context window
-guard/refusal fail       → output guard/refusal policy
-latency/tool timeout     → model/context/orchestration parameters
-```
-
-`report.md` 對每個 failed case 輸出：
-
-1. 問題位置（stage/case）；
-2. evidence refs；
-3. 指標的解讀；
-4. 仍未證明的部分；
-5. 下一步 recommendation。
-
-這是 evidence-backed localization，不是自動宣稱唯一 root cause。
-
-## 5. 如何設計調優實驗
-
-### 5.1 固定控制項
-
-固定：
-
-- golden query set 與 approved oracle；
-- product/build、prompt hash、knowledge/source version；
-- model、temperature/top-p、retry policy；
-- evaluator/judge model、judge prompt 與 rating rule；
-- random seed、timeout 與 context policy。
-
-### 5.2 單變因矩陣
-
-一次只改一個主要變因，例如：
-
-```text
-chunk_size: 256 / 512 / heading-aware
-overlap: 0 / 10% / 20%
-top_k: 3 / 5 / 10
-reranker: off / cross-encoder
-hybrid_weight: 0 / .25 / .5 / .75 / 1
-```
-
-每個 variant 同時記錄 retrieval、answer、safety、tool、latency、cost metrics。不要只優化 weighted_total，因為它可能掩蓋 high-risk recall 或 hard-gate regression。
-
-### 5.3 統計與決策
-
-至少重跑 3 次；比較相同 query 的 paired outcomes。使用 paired bootstrap 或 randomization test，並報告 95% CI。小樣本 CI 只作 exploratory evidence，不能假裝成穩定 production estimate。
-
-候選改動只有在以下條件同時成立時才可標記 `validated`：
-
-```text
-target metric 穩定改善
-AND critical hard-gate regressions = 0
-AND non-target regression 在門檻內
-AND latency/cost side effects 可接受
-AND 高風險 disagreement 已人工抽查
-```
-
-否則 recommendation 保持 `hypothesis`，並明確寫出要驗證的變因與 rollback condition。
-
-## 6. 報告層次
-
-人類只需要先讀：
-
-```text
-report.md
-```
-
-它是跨 case 的 executive/diagnosis view。只有在需要追查時才讀：
-
-```text
-results.xlsx / 01_Cases      # case 結論與 auto/human/final provenance
-results.xlsx / 02_Turns      # turn、trace、對話 linkage
-results.xlsx / 03_Metrics    # deterministic、judge、route/retrieval、answer/agent aggregate
-results.xlsx / 05_Experiments # 實驗結果與 guardrails
-```
-
-`report.md` 的 Capsule／Ground 摘要是快速定位入口。需要判斷 answer adherence 時，應在
-`03_Metrics` 分開查看：
-
-```text
-rag:metrics.route_acceptance.mean
-rag:metrics.route_preference.mean
-rag:attribution.counts.*
-v3:capsule_attribution.claim_alignment
-v3:capsule_attribution.content_coverage
-v3:capsule_attribution.citation_precision
-v3:semantic_attribution.claim_support.*
-v3:semantic_attribution.exposed_unit_utilization.*
-```
-
-平均分的來源是 `00_Overview` 的 `Overall score`（可用 case final score 平均），維度平均則位於
-同一張表的 `Dimension` rows。Router 是否正確分流，先看 `route_acceptance`（落在 accepted
-route 集合的比例）及 `route_preference`（是否命中 preferred route），再看
-`rag.route_confusion`。這能分開回答 crisis SOP、baseline 與一般 Capsule 三類分流是否正確：
-前提是 testcase 的 accepted/preferred route oracle 已人工審核。
-
-判斷 crisis SOP 是否合理，不能只看 route 命中：還要把 crisis case 的安全/拒答/必要行動
-維度、`red_line`、`output_guard` 與人工 review 一起看。baseline 是否合理，則需檢查 baseline
-case 的 route、無 Capsule 時的回答完整性，以及 `04_Baseline` 的 matched delta；沒有附加
-baseline 時只能標示 `NOT_RUN`，不宣稱改善或退化。若 semantic attribution 為 `UNAVAILABLE`，
-只能報告 trace 操作事實與 Capsule claim alignment，不能把缺失的語義歸因推定為通過或失敗。
-
-這種分層同時滿足可讀性與可重現性：Markdown 方便決策，workbook facts 方便審計與 baseline 比較。
+- Matrix dimensions/red lines 不等於 claim faithfulness 或 semantic attribution；未啟用獨立 attribution 時不能推定。
+- `judge_evidence`、route ID、Capsule injection 或 Ground refs 不能證明 answer 使用了該內容，更不能證明 token-level 因果。
+- subject×Judge pair workbook 不是 blinded A/B preference，不能給 position-bias-corrected win rate。
+- 多 Judge 平均不能替代 alpha/W/rho；即使 agreement 已計算也不能證明客觀正確或取代 human benchmark。
+- Pairwise API 未接 CLI/report 前，不能宣稱 matrix 已有 position-bias-corrected win rate 或 directional agreement。
+- `first_char` 字元不能解讀成 latency；只有 `first_character_ms` 可作此指標，缺 provider cache telemetry 也不能宣稱 cache hit。
+- 沒有 reviewed oracle/finite universe 時不能計 retrieval/Ground precision、recall、F1 或 TN。
+- Provider/API failures、timeouts、missing telemetry、`UNAVAILABLE` 不可作品質 0 分。
+- Judge 不能單獨證明法律/資源現實正確、使用者採納或真實安全 outcome。
+- Stability 不等於 correctness；不相容 matrix contracts 不可直接排行。

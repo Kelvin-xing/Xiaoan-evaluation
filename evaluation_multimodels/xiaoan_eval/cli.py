@@ -173,6 +173,8 @@ def _parser() -> argparse.ArgumentParser:
     matrix.add_argument("--output", required=True, help="directory for report.md and results.xlsx")
     matrix.add_argument("--subject-transport", required=True, metavar="MODULE:CALLABLE")
     matrix.add_argument("--judge-transport", required=True, metavar="MODULE:CALLABLE")
+    matrix.add_argument("--attribution-judge-plugin", metavar="MODULE:CALLABLE", help="optional dedicated attribution/v1 provider over frozen answers")
+    matrix.add_argument("--attribution-judge-version", default="attribution-judge/v1")
     matrix.add_argument("--rating-rule", default="ratings rule.yml")
     matrix.add_argument("--subjects", help="JSON file containing subject ModelSpec objects")
     matrix.add_argument("--judges", help="JSON file containing judge ModelSpec objects")
@@ -196,6 +198,7 @@ def _matrix(args: argparse.Namespace) -> int:
     # defaults are resolved, so dotenv model overrides are effective.
     subject_transport = _load_plugin(args.subject_transport)
     judge_transport = _load_plugin(args.judge_transport)
+    attribution_provider = _load_plugin(args.attribution_judge_plugin) if getattr(args, "attribution_judge_plugin", None) else None
     subject_specs = _load_matrix_specs(args.subjects, default_subject_specs())
     judge_specs = _load_matrix_specs(args.judges, default_judge_specs())
     audit_checkpoint = output.parent / ".matrix-audit" / output.name / "matrix-checkpoint.jsonl"
@@ -223,6 +226,8 @@ def _matrix(args: argparse.Namespace) -> int:
         judge_concurrency=int(getattr(args, "judge_concurrency", 3)),
         max_in_flight=int(getattr(args, "max_in_flight", 3)),
         per_provider_concurrency=int(getattr(args, "per_provider_concurrency", 1)),
+        attribution_provider=attribution_provider,
+        attribution_judge_version=str(getattr(args, "attribution_judge_version", "attribution-judge/v1")),
     )
     write_matrix_workbook(rows, output / "results.xlsx")
     write_pair_workbooks(rows, output / "pairs")

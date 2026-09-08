@@ -117,7 +117,7 @@ Weighted_Total = sum(score[m] * final_weight[m])
 
 Pairwise 勝率不能回填成 absolute quality score，也不能用來抵銷 safety hard gate。模型或 prompt 的發布判斷先看 operational/safety gate，再看 absolute quality；pairwise 僅作相容版本的改善證據。
 
-每個 matrix cell 至少綁定 `case_id`、`turn`、`answer_id`、`subject_id`、`judge_id`、`display_order`、`prompt/rule/schema hash`、`control_digest`、`status` 和原始 rationale。`subject=judge` 的 self-judging cell 必須獨立報告，不直接混入主要排名。
+每個 absolute matrix cell 至少綁定 `case_id`、`turn`、`answer_id`、`subject_id`、`judge_id`、`prompt/rule/schema hash`、`control_digest`、`status` 和原始 rationale；pairwise observation 另必須綁定 `display_order`、left/right answer IDs 與 `winner`。`subject=judge` 的 self-judging cell 必須獨立報告，不直接混入主要排名。
 
 ### 5.0.1 固定 controls 與先生成後評審
 
@@ -317,3 +317,152 @@ Baseline 必須是通過 schema/digest/`FINAL`/measurement contract 的正式 wo
 - 不能僅靠 Judge 分數證明法律內容在現實中一定正確、資源一定可用、使用者一定採納建議，或實際安全結果已改善。
 - 不能用 stability 證明回答正確；穩定地答錯仍然是錯。
 - 不能在不同 case contract、rating rule、judge prompt、model、deployment 或 knowledge snapshot 間直接排列分數，除非報告明確建立相容性與比較邊界。
+
+## 附錄 A：回答與 Capsule／Wiki／Ground 的語義支持如何計算
+
+本附錄說明 `evaluation` 與 `evaluation_multimodels` 現行程式由誰判斷回答是否得到知識內容支持、如何聚合，以及結果能否回指到待修改的內容單位。
+
+### A.1 這不是 embedding 語意相似度
+
+目前核心方法不是 embedding cosine similarity，也不是字詞重疊率。系統要求 LLM Judge 把回答拆成 claims，判斷 claim 是否被當輪真正送入 Composer 的證據語義蘊含。
+
+因此應稱為 **claim-level semantic support／attribution**。它回答「此 claim 能否由可見證據支持」，不回答「兩段文字表面上有多相似」。
+
+### A.2 誰負責判斷
+
+| 執行方式 | 語義判斷者 | 現行輸出能力 |
+| --- | --- | --- |
+| `evaluation run` | `--judge-plugin` 指定的 primary Judge | 輸出 `faithfulness_claims`、`supported`、`evidence_refs`、`uncertainty`。 |
+| `evaluation run` 加 `--attribution-judge-plugin` | 獨立 dedicated attribution Judge | 輸出 answer span、evidence span、layer、relation、occurrence。 |
+| `evaluation_multimodels run` | 與 `evaluation run` 相同 | 支援相同的 optional attribution contract。 |
+| `evaluation_multimodels matrix` | matrix rubric Judges；可另配獨立 attribution Judge | Rubric schema 輸出 red lines 與 0–3 dimensions；`--attribution-judge-plugin` 可在凍結 answers 上另跑 exact-span attribution。 |
+
+內建一般 Judge 由 `company_eval_plugins:judge` 提供。實際模型由 `XIAOAN_JUDGE_MODEL` 決定；程式預設值可被 `.env` 覆寫，因此報告必須記錄實際 model 與 judge version。
+
+兩個 evaluator 的 `run` 與 multimodel `matrix` 都有 `--attribution-judge-plugin` 介面、嚴格 schema 和聚合程式，但現行 `company_eval_plugins.py` 沒有內建可直接指定的 attribution callable。未另行提供 plugin 時，dedicated attribution 不會執行。
+
+此時一般 `run` 報告只能使用一般 Judge 的 `faithfulness_claims` 和 legacy capsule alignment；matrix 的 attribution 標為 `NOT_RUN`。若已要求執行 attribution 但 provider、snapshot 或 validator 失敗，才標為 `UNAVAILABLE`。兩種狀態都不能補成 0。
+
+### A.3 Evidence catalog 如何建立
+
+Evidence catalog 只收錄當輪 Composer invocation 中 `inclusion_state=EXPOSED` 的內容。每個 evidence unit 綁定：
+
+- `ref`；
+- `layer`；
+- `occurrence_id`；
+- `unit_id`；
+- `source_turn`；
+- 原始 `content`；
+- `content_sha256`；
+- `snapshot_id`。
+
+允許的 layer 是 `PROMPT`、`CAPSULE`、`WIKI`、`SOURCE`、`CURRENT_INPUT`、`PRIOR_USER` 和 `PRIOR_ASSISTANT`。Router 看過但 Composer 沒看過的內容，不得作為回答支持證據。
+
+常用 ref 形式包括：
+
+```text
+input:current
+history:<n>
+capsule:<capsule_id>:<unit_id>
+ground:<ref>
+```
+
+`ground.resolved_refs` 只表示 resolver 解析了什麼。只有相應 WIKI／SOURCE 內容實際暴露給 Composer，才可進入 semantic attribution 的證據集合。
+
+### A.4 一般 Judge 如何判斷
+
+一般 Judge 對每個 substantive claim 輸出：
+
+```text
+claim
+supported: true | false
+evidence_refs: [...]
+uncertainty: low | medium | high
+```
+
+本地 validator 要求 `supported=true` 至少引用一個本輪 catalog ref；`supported=false` 不得帶 ref；所有 ref 都必須存在。這能驗證引用真實性，但 `supported` 本身仍是 Judge 的語義判斷。
+
+一般 Judge 沒有強制回傳精確 answer/evidence span，因此可定位到 ref 或 logical unit，不能單靠這份輸出證明具體哪幾個字支持 claim。
+
+Legacy `capsule_attribution.claim_alignment` 計算「引用 Capsule ref 的 claims 中，有效命中已注入 unit 的比例」。它是引用有效性指標，不是語義相似度，也不是 token 來源證明。
+
+### A.5 Dedicated attribution 如何判斷與聚合
+
+Dedicated attribution Judge 對每個 claim 回傳精確 `answer_span`、`evidence_ref`、`evidence_span`、`relation` 和 `uncertainty`。Validator 逐字核對 span、ref、hash、snapshot 與 occurrence。
+
+關係及權重如下：
+
+| Relation | 權重 | 解讀 |
+| --- | ---: | --- |
+| `ENTAILS` | 1.0 | 證據完整支持 claim。 |
+| `PARTIAL` | 0.5 | 證據只支持 claim 的一部分。 |
+| `CONTEXT_ONLY` | 0.0 | 僅提供背景，不能推出 claim。 |
+| `CONTRADICTS` | 0.0 | 證據與 claim 衝突。 |
+| `UNSUPPORTED` | 0.0 | 沒有可用支持證據。 |
+
+只把 `FACTUAL`、`INTERPRETIVE`、`RECOMMENDATION`、`ACTION` 納入 substantive claim 分母。`SUPPORTIVE` 可保留歸因，但不進入 substantive support rate。
+
+```text
+overall claim support
+= Σ 每個 substantive claim 的最高支持權重
+  / substantive claim 數量
+
+layer support
+= Σ 每個 claim 在該 layer 的最高支持權重
+  / substantive claim 數量
+
+exposed-unit utilization
+= 被 ENTAILS／PARTIAL 引用的 occurrence 數
+  / 暴露給 Composer 的 occurrence 數
+```
+
+同一 claim 可同時由多個 layer 支持。因此 Capsule、Wiki、Source 的 layer support rate 不是互斥分布，合計可能超過 100%。
+
+### A.6 Capsule、Wiki、Ground 如何分開解讀
+
+- **Capsule**：分開檢查 router 是否選中、Composer 是否注入、claim 是否引用相應 unit。只有第三項可支持「回答使用了 Capsule 內容」的語義判斷。
+- **Wiki**：以 `layer=WIKI` 進入 catalog，使用同一組 relation 與權重計算 Wiki layer support。
+- **Source**：以 `layer=SOURCE` 進入 catalog，可回指法律原文或其他來源錨點。
+- **Ground**：不是獨立 semantic layer；它是 resolver 的操作與 provenance 層，最終提供 WIKI／SOURCE units。
+
+沒有 reviewed retrieval oracle 時，`ground_precision`、`ground_recall` 必須為 `SKIP` 或 `UNAVAILABLE`。Resolved ref 數量不能當作回答忠實度分數。
+
+### A.7 能否定位到哪一條需要修改
+
+一般 Judge 可定位到 logical evidence unit。例如 `capsule:n5p:recognize:0` 可映射到 N5p 的 `recognize` 單位；`ground:personal-safety-protection-order` 可映射到 Wiki node，再沿 `source_refs` 找來源錨點。
+
+Dedicated attribution 啟用後，還可指出回答的精確 claim span 和證據內的精確 evidence span。建議私有診斷資料至少保留：
+
+```text
+case_id / turn
+answer claim + answer span
+relation + uncertainty
+layer + evidence_ref
+occurrence_id + unit_id
+evidence span
+候選檔案與欄位
+```
+
+目前 public `results.xlsx`／`report.md` 主要提供聚合與逐 turn 導航。要可靠回指精確 span，仍需讀取 ignored private checkpoint／observation，或把經過 PII 檢查的定位欄位加入公開 workbook。
+
+「低支持」只能定位問題所在 stage，不能直接證明哪個檔案必須修改。應按下表診斷：
+
+| 觀察 | 優先定位 | 候選修改點 |
+| --- | --- | --- |
+| route 未命中預期 Capsule | Router | Capsule `triggers`、`use_when`、`do_not_use_when`、router prompt／threshold。 |
+| route 命中但沒有 Capsule units | Injection | Capsule compiler、context assembly、Composer injection。 |
+| Ground resolution error／漏 ref | Resolver | Capsule `ground.nodes`、Wiki ref、source mapping、resolver。 |
+| 證據已暴露但 claim 為 `UNSUPPORTED` | Composer／知識內容 | Composer instruction、context ordering，或 Capsule／Wiki／Source 缺失內容。 |
+| claim 為 `PARTIAL` | 內容粒度 | 拆分或補足 atomic evidence unit，避免一條混合多個不可共同證明的結論。 |
+| claim 為 `CONTRADICTS` | 回答或權威來源 | 先核對權威來源，再修正 Capsule/Wiki 或 Composer instruction。 |
+| evidence unit 暴露但 utilization 低 | Composer | context 排序、冗餘內容、引用策略、回答格式指令。 |
+
+修改建議仍是假設。只有在固定 case、model、judge、prompt、knowledge snapshot 等 controls 下，對單一變量執行 paired repeated experiment，才可判定修改是否造成改善。
+
+### A.8 `evaluation_multimodels matrix` 的能力與限制
+
+Matrix runner 會把 `CAPSULE`、`WIKI`、`SOURCE` units 投影成精簡 `judge_evidence`，讓多個 rubric Judge 看見相同證據。它也會拒絕無法對應到實際 evidence item 的 Ground refs，並強制完整 red-line IDs、evidence 和命中歸零 contract。
+
+現行 matrix rubric Judge schema 負責 red lines 與 `dimensions`，不把 `faithfulness_claims`、answer span 或 evidence span 混入同一回應。需要 claim-level semantic attribution 時，使用 `--attribution-judge-plugin` 在所有 subject answers 凍結後執行獨立 second pass；該 pass 沿用 A.5 的 exact-span/ref/relation validator。
+
+因此，未配置 attribution plugin 的 matrix 只能比較 rubric/red-line 評分，不能回答「哪個 answer claim 由哪一條 Capsule／Wiki／Source 支持」。配置後，private row/checkpoint 可保留逐 claim 結果，但現行公開 `results.xlsx` 和 `report.md` 只聚合 attribution availability，尚未展開逐 claim/span 列；正式 release 仍需 human-calibrated benchmark，不能用 Judge 自一致取代真實正確性。
