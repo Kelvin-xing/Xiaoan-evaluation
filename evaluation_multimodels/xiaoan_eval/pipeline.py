@@ -269,14 +269,14 @@ class EvaluationPipeline:
             if not needs_second:
                 review_statuses.append(ReviewStatus.NOT_REQUESTED.value)
                 judge_audits.append(
-                    {"primary": _judge_dict(primary), "secondary": None, "reconciliation_reasons": []}
+                    {"primary": _judge_dict(primary, self._primary), "secondary": None, "reconciliation_reasons": []}
                 )
             elif self._secondary is None:
                 # Secondary judging is optional. A valid primary result remains
                 # the score when the secondary judge is deliberately disabled.
                 review_statuses.append(ReviewStatus.NOT_REQUESTED.value)
                 judge_audits.append(
-                    {"primary": _judge_dict(primary), "secondary": None, "reconciliation_reasons": ["secondary judge disabled; primary score used"]}
+                    {"primary": _judge_dict(primary, self._primary), "secondary": None, "reconciliation_reasons": ["secondary judge disabled; primary score used"]}
                 )
             else:
                 if self._egress_validator is not None and not self._egress_validator(request):
@@ -291,7 +291,7 @@ class EvaluationPipeline:
                     review_statuses.append(ReviewStatus.NOT_REQUESTED.value)
                     judge_audits.append(
                         {
-                            "primary": _judge_dict(primary),
+                            "primary": _judge_dict(primary, self._primary),
                             "secondary": None,
                             "reconciliation_reasons": [
                                 f"secondary judge unavailable; primary score used: {type(exc).__name__}: {exc}"
@@ -305,8 +305,8 @@ class EvaluationPipeline:
                 review_statuses.append(reconciliation.status.value)
                 judge_audits.append(
                     {
-                        "primary": _judge_dict(primary),
-                        "secondary": _judge_dict(secondary),
+                        "primary": _judge_dict(primary, self._primary),
+                        "secondary": _judge_dict(secondary, self._secondary),
                         "reconciliation_reasons": list(reconciliation.reasons),
                     }
                 )
@@ -469,8 +469,11 @@ def _section_refs(section: Mapping[str, Any], keys: tuple[str, ...]) -> list[str
     return []
 
 
-def _judge_dict(result: JudgeResult) -> dict[str, Any]:
+def _judge_dict(result: JudgeResult, client: JudgeClient | None = None) -> dict[str, Any]:
     return {
+        "judge_id": getattr(client, "judge_id", "judge:unknown"),
+        "provider": getattr(client, "provider_id", "unknown"),
+        "model": getattr(client, "model", "unknown"),
         "red_lines": [asdict(item) for item in result.red_lines],
         "dimensions": [asdict(item) for item in result.dimensions],
         "legal_claims": [asdict(item) for item in result.legal_claims],

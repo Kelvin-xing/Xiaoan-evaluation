@@ -31,6 +31,24 @@ class ProviderCallError(RuntimeError):
         self.retry_errors = tuple(retry_errors)
 
 
+def _globalai_http_error_detail(exc: HTTPError) -> str:
+    """Extract only structured GlobalAI error fields; never include raw body."""
+    try:
+        raw = exc.read()
+        payload = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    error = payload.get("error") if isinstance(payload, Mapping) else None
+    if not isinstance(error, Mapping):
+        return ""
+    fields = []
+    for name in ("code", "type", "message"):
+        value = error.get(name)
+        if isinstance(value, (str, int, float)) and str(value):
+            fields.append(f"{name}={str(value)[:240]}")
+    return ", ".join(fields)
+
+
 def _is_model_setting(name: str) -> bool:
     return name.startswith("XIAOAN_") and name.endswith(("_MODEL", "_MODELS"))
 
@@ -67,7 +85,13 @@ def multimodel_transport(spec: Any, prompt: str) -> Mapping[str, Any]:
     if not key:
         raise RuntimeError(f"missing GLOBALAI_API_KEY (or XIAOAN_{provider.upper()}_API_KEY)")
     use_anthropic = provider == "claude" and os.getenv("XIAOAN_CLAUDE_API_MODE", "auto").strip().lower() != "openai"
-    endpoint = os.getenv("GLOBALAI_API_BASE", "https://globalai.vip/v1").rstrip("/") + ("/messages" if use_anthropic else "/chat/completions")
+    endpoint_suffix = "/messages" if use_anthropic else "/chat/completions"
+    endpoint = (
+        os.getenv(f"XIAOAN_{provider.upper()}_ENDPOINT")
+        or os.getenv("GLOBALAI_API_BASE", "https://globalai.vip/v1")
+    ).rstrip("/")
+    if not endpoint.endswith(endpoint_suffix):
+        endpoint += endpoint_suffix
     envelope: Mapping[str, Any] = {}
     try:
         parsed = json.loads(prompt)
@@ -93,6 +117,8 @@ def multimodel_transport(spec: Any, prompt: str) -> Mapping[str, Any]:
         body["prompt_cache_key"] = envelope.get("prompt_cache_key")
     elif use_anthropic:
         body["messages"] = [{"role": "user", "content": prompt}]
+    names: list[str] = []
+    red_line_ids: list[str] = []
     if getattr(spec, "tier", "") == "judge":
         modules = envelope.get("stable_prefix", {}).get("modules", []) if envelope else []
         names = [str(item["name"]) for item in modules if isinstance(item, Mapping) and item.get("name")]
@@ -131,11 +157,20 @@ def multimodel_transport(spec: Any, prompt: str) -> Mapping[str, Any]:
         try:
             with urlopen(request, timeout=float(os.getenv("XIAOAN_PROVIDER_TIMEOUT", "120"))) as response:  # noqa: S310 - endpoint is explicit operator configuration
                 payload = json.loads(response.read())
+            if getattr(spec, "tier", "") == "judge":
+                semantic_error = _judge_response_error(payload, use_anthropic, names, red_line_ids)
+                if semantic_error:
+                    retry_errors.append(semantic_error)
+                    if attempt < retries:
+                        time.sleep(min(30.0, (2 ** attempt) + random.random()))
+                        continue
             break
         except HTTPError as exc:
             retry_errors.append(f"HTTP_{exc.code}")
             if exc.code not in {429, 500, 502, 503, 504} or attempt == retries:
-                raise ProviderCallError(f"GlobalAI HTTP {exc.code}", attempt_count=attempt + 1, retry_errors=retry_errors) from exc
+                detail = _globalai_http_error_detail(exc)
+                suffix = f": {detail}" if detail else ""
+                raise ProviderCallError(f"GlobalAI HTTP {exc.code}{suffix}", attempt_count=attempt + 1, retry_errors=retry_errors) from exc
             retry_after = exc.headers.get("Retry-After")
             delay = min(30.0, float(retry_after)) if retry_after and retry_after.replace(".", "", 1).isdigit() else min(30.0, (2 ** attempt) + random.random())
             time.sleep(delay)
@@ -154,12 +189,20 @@ def multimodel_transport(spec: Any, prompt: str) -> Mapping[str, Any]:
         content = payload.get("content", [])
         tool_inputs = [block.get("input") for block in content if isinstance(block, Mapping) and block.get("type") == "tool_use" and isinstance(block.get("input"), Mapping)]
         text = json.dumps(tool_inputs[-1], ensure_ascii=False) if tool_inputs else "".join(str(block.get("text", "")) for block in content if isinstance(block, Mapping))
+        text = _normalize_json_text(text)
         usage_raw = payload.get("usage", {})
         input_tokens = int(usage_raw.get("input_tokens", 0) or 0) if isinstance(usage_raw, Mapping) else 0
         output_tokens = int(usage_raw.get("output_tokens", 0) or 0) if isinstance(usage_raw, Mapping) else 0
         usage = dict(usage_raw) if isinstance(usage_raw, Mapping) else {}
         usage.update({"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": input_tokens + output_tokens})
         return {"id": payload.get("id"), "text": text, "usage": usage, "_xiaoan_attempt_count": attempt + 1, "_xiaoan_retry_errors": retry_errors}
+    if getattr(spec, "tier", "") == "judge" and isinstance(payload.get("choices"), list):
+        choices = [dict(choice) if isinstance(choice, Mapping) else choice for choice in payload["choices"]]
+        if choices and isinstance(choices[0], Mapping) and isinstance(choices[0].get("message"), Mapping):
+            message = dict(choices[0]["message"])
+            message["content"] = _normalize_json_text(message.get("content"))
+            choices[0]["message"] = message
+        payload = {**payload, "choices": choices}
     return {**payload, "_xiaoan_attempt_count": attempt + 1, "_xiaoan_retry_errors": retry_errors}
 
 
@@ -178,7 +221,7 @@ class XiaoAnChatflowTransport:
     def _json(self, method: str, url: str, body: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
         request = Request(url, data=data, method=method, headers={"Content-Type": "application/json", "Accept": "application/json"})
-        with self._state().opener.open(request, timeout=float(os.getenv("XIAOAN_PROVIDER_TIMEOUT", "120"))) as response:
+        with self._state().opener.open(request, timeout=float(os.getenv("XIAOAN_CHATFLOW_TIMEOUT", "600"))) as response:
             payload = json.loads(response.read())
         if not isinstance(payload, Mapping):
             raise RuntimeError("XiaoAn chatflow returned non-object JSON")
@@ -244,6 +287,91 @@ class ProviderText(str):
         instance = super().__new__(cls, value)
         instance.usage = dict(usage or {})
         return instance
+
+
+def _normalize_json_text(value: Any) -> Any:
+    """Remove only markdown fences around provider JSON; never infer content."""
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip()
+    if normalized.startswith("```") and normalized.endswith("```"):
+        first_newline = normalized.find("\n")
+        if first_newline != -1:
+            normalized = normalized[first_newline + 1 : -3].strip()
+    return normalized
+
+
+def _judge_response_text(payload: Mapping[str, Any], use_anthropic: bool) -> str:
+    if use_anthropic:
+        content = payload.get("content", [])
+        if not isinstance(content, list):
+            return ""
+        tool_inputs = [
+            block.get("input")
+            for block in content
+            if isinstance(block, Mapping)
+            and block.get("type") == "tool_use"
+            and isinstance(block.get("input"), Mapping)
+        ]
+        if tool_inputs:
+            return json.dumps(tool_inputs[-1], ensure_ascii=False)
+        return str(_normalize_json_text("".join(
+            str(block.get("text", "")) for block in content if isinstance(block, Mapping)
+        )))
+    choices = payload.get("choices", [])
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        return ""
+    message = choices[0].get("message", {})
+    if not isinstance(message, Mapping):
+        return ""
+    content = _normalize_json_text(message.get("content"))
+    return content if isinstance(content, str) else ""
+
+
+def _judge_response_error(
+    payload: Mapping[str, Any],
+    use_anthropic: bool,
+    dimension_names: list[str],
+    red_line_ids: list[str],
+) -> str | None:
+    text = _judge_response_text(payload, use_anthropic).strip()
+    if not text:
+        return "EMPTY_RESPONSE"
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return "INVALID_JUDGE_JSON"
+    if not isinstance(parsed, Mapping):
+        return "INVALID_JUDGE_SCHEMA"
+    dimensions = parsed.get("dimensions")
+    if not isinstance(dimensions, Mapping) or set(dimensions) != set(dimension_names):
+        return "INVALID_JUDGE_SCHEMA"
+    if any(
+        isinstance(score, bool) or not isinstance(score, int) or score not in {0, 1, 2, 3}
+        for score in dimensions.values()
+    ):
+        return "INVALID_JUDGE_SCHEMA"
+    red_lines = parsed.get("red_lines")
+    if not isinstance(red_lines, list):
+        return "INVALID_JUDGE_SCHEMA"
+    seen: set[str] = set()
+    for item in red_lines:
+        if not isinstance(item, Mapping):
+            return "INVALID_JUDGE_SCHEMA"
+        identifier = item.get("id")
+        evidence = item.get("evidence")
+        if (
+            not isinstance(identifier, str)
+            or identifier in seen
+            or not isinstance(item.get("triggered"), bool)
+            or not isinstance(evidence, list)
+            or any(not isinstance(entry, str) for entry in evidence)
+        ):
+            return "INVALID_JUDGE_SCHEMA"
+        seen.add(identifier)
+    if seen != set(red_line_ids):
+        return "INVALID_JUDGE_SCHEMA"
+    return None
 
 
 def _usage_mapping(value: Any) -> dict[str, Any]:

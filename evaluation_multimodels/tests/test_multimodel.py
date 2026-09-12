@@ -337,10 +337,26 @@ def test_matrix_marks_self_judging_outside_primary_denominator() -> None:
         subject_transport=lambda *_args: {"text": "answer"},
         judge_transport=lambda *_args: {"text": _judge_json(rule, 2)},
         rating_rule=rule,
+        isolate_self_judging=True,
     )
     assert rows[0]["self_judging"] is True
     assert rows[0]["primary_eligible"] is False
     assert "SELF_ISOLATED" in render_matrix_report(rows)
+
+
+def test_matrix_includes_self_judging_in_default_matrix_and_denominator() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    rows = run_matrix(
+        ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "same", "latest", "medium"),),
+        (ModelSpec("gpt", "same", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer"},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 2)},
+        rating_rule=rule,
+    )
+    assert rows[0]["self_judging"] is True
+    assert rows[0]["primary_eligible"] is True
+    assert "2.0000" in render_matrix_report(rows)
 
 
 def test_workbook_main_matrix_isolates_self_score_in_separate_sheet(tmp_path: Path) -> None:
@@ -351,6 +367,7 @@ def test_workbook_main_matrix_isolates_self_score_in_separate_sheet(tmp_path: Pa
         (ModelSpec("gpt", "same", "judge", "medium"),),
         subject_transport=lambda *_args: {"text": "answer"},
         judge_transport=lambda *_args: {"text": _judge_json(rule, 3)}, rating_rule=rule,
+        isolate_self_judging=True,
     )
     path = tmp_path / "results.xlsx"
     write_matrix_workbook(rows, path)
@@ -358,6 +375,21 @@ def test_workbook_main_matrix_isolates_self_score_in_separate_sheet(tmp_path: Pa
     assert workbook["Matrix"].cell(2, 2).value == "SELF_ISOLATED"
     isolated = list(workbook["Self_Judging_Isolated"].iter_rows(values_only=True))
     assert isolated[1][5] == 3
+
+
+def test_matrix_can_opt_in_to_self_judging_isolation() -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    rows = run_matrix(
+        ({"id": "TC", "turns": ({"turn": 1, "user": "hello"},)},),
+        (ModelSpec("gpt", "same", "latest", "medium"),),
+        (ModelSpec("gpt", "same", "judge", "medium"),),
+        subject_transport=lambda *_args: {"text": "answer"},
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 3)},
+        rating_rule=rule,
+        isolate_self_judging=True,
+    )
+    assert rows[0]["primary_eligible"] is False
+    assert "SELF_ISOLATED" in render_matrix_report(rows)
 
 
 def test_first_character_latency_is_only_copied_from_explicit_telemetry() -> None:
@@ -903,6 +935,193 @@ def test_matrix_resume_preserves_validated_error_class(tmp_path: Path) -> None:
 
     assert first[0]["judgement"]["error_type"] == "INVALID_JUDGE_JSON"
     assert resumed[0]["judgement"]["error_type"] == "INVALID_JUDGE_JSON"
+
+
+def test_matrix_resume_can_retry_unavailable_judge_with_frozen_answer(tmp_path: Path) -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    checkpoint = tmp_path / "matrix-checkpoint.jsonl"
+    calls = {"subject": 0, "judge": 0}
+
+    def subject(*_args):
+        calls["subject"] += 1
+        return {"text": "frozen answer"}
+
+    def unavailable_judge(*_args):
+        calls["judge"] += 1
+        return {"text": ""}
+
+    kwargs = dict(
+        cases=({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
+        subjects=(ModelSpec("gpt", "subject", "latest", "medium"),),
+        judges=(ModelSpec("qwen", "judge", "judge", "medium"),),
+        subject_transport=subject,
+        rating_rule=rule,
+        checkpoint_path=checkpoint,
+    )
+    first = run_matrix(**kwargs, judge_transport=unavailable_judge)
+    resumed = run_matrix(
+        **kwargs,
+        resume=True,
+        retry_unavailable=True,
+        judge_transport=lambda *_args: (
+            calls.__setitem__("judge", calls["judge"] + 1)
+            or {"text": _judge_json(rule, 3)}
+        ),
+    )
+
+    assert first[0]["status"] == "UNAVAILABLE"
+    assert resumed[0]["status"] == "PASS"
+    assert resumed[0]["answer"]["text"] == "frozen answer"
+    assert calls == {"subject": 1, "judge": 2}
+
+
+def test_matrix_resume_retries_entire_failed_subject_lane_and_its_judges(tmp_path: Path) -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    checkpoint = tmp_path / "matrix-checkpoint.jsonl"
+    calls = {"subject": 0, "judge": 0, "attribution": 0, "start": 0, "end": 0}
+    trace = {
+        "effective_context_snapshot": {
+            "schema_version": "effective-context-snapshot/v1",
+            "snapshot_id": "snap",
+            "turn": 1,
+            "context_kind": "BASELINE",
+            "router": {"status": "NOT_APPLICABLE", "units": []},
+            "composer": {"status": "INVOKED", "units": []},
+        }
+    }
+
+    class StatefulSubject:
+        def start_case(self, *_args):
+            calls["start"] += 1
+
+        def end_case(self, *_args):
+            calls["end"] += 1
+
+        def __call__(self, *_args):
+            calls["subject"] += 1
+            if calls["subject"] == 2:
+                raise TimeoutError("subject failed")
+            return {
+                "text": f"answer-{calls['subject']}",
+                "chatflow_debug": trace,
+            }
+
+    subject = StatefulSubject()
+
+    def judge(*_args):
+        calls["judge"] += 1
+        return {"text": _judge_json(rule, 3)}
+
+    def attribution(*_args):
+        calls["attribution"] += 1
+        return json.dumps({
+            "contract_version": "attribution/v1",
+            "claims": [],
+            "policies": [],
+            "abstention": {"status": "ANSWERED", "reason": None},
+        })
+
+    kwargs = dict(
+        cases=({"id": "TC-01", "turns": (
+            {"turn": 1, "user": "first"},
+            {"turn": 2, "user": "second"},
+        )},),
+        subjects=(ModelSpec("gpt", "subject", "latest", "medium"),),
+        judges=(
+            ModelSpec("qwen", "judge-a", "judge", "medium"),
+            ModelSpec("claude", "judge-b", "judge", "medium"),
+        ),
+        subject_transport=subject,
+        judge_transport=judge,
+        rating_rule=rule,
+        checkpoint_path=checkpoint,
+        attribution_provider=attribution,
+    )
+
+    first = run_matrix(**kwargs)
+    resumed = run_matrix(**kwargs, resume=True, retry_unavailable=True)
+
+    assert [row["status"] for row in first] == [
+        "PASS", "PASS", "UNAVAILABLE", "UNAVAILABLE",
+    ]
+    assert [row["status"] for row in resumed] == ["PASS"] * 4
+    assert [row["answer"]["text"] for row in resumed] == [
+        "answer-3", "answer-3", "answer-4", "answer-4",
+    ]
+    assert calls == {
+        "subject": 4, "judge": 6, "attribution": 3, "start": 2, "end": 2,
+    }
+
+
+def test_retry_unavailable_requires_resume() -> None:
+    with pytest.raises(ValueError, match="requires resume"):
+        run_matrix(
+            (), (), (),
+            subject_transport=lambda *_args: {},
+            judge_transport=lambda *_args: {},
+            rating_rule=load_rating_rule("ratings rule.yml"),
+            retry_unavailable=True,
+        )
+
+
+def test_interrupted_subject_lane_retry_cannot_mix_answer_generations(tmp_path: Path) -> None:
+    rule = load_rating_rule("ratings rule.yml")
+    checkpoint = tmp_path / "matrix-checkpoint.jsonl"
+
+    class InterruptingSubject:
+        generation = 0
+        turn = 0
+
+        def start_case(self, *_args):
+            self.generation += 1
+            self.turn = 0
+
+        def end_case(self, *_args):
+            pass
+
+        def __call__(self, *_args):
+            self.turn += 1
+            if self.generation == 1 and self.turn == 2:
+                raise TimeoutError("initial failure")
+            if self.generation == 2 and self.turn == 3:
+                raise KeyboardInterrupt("interrupted retry")
+            return {"text": f"g{self.generation}-t{self.turn}"}
+
+    subject = InterruptingSubject()
+    kwargs = dict(
+        cases=({"id": "TC-01", "turns": (
+            {"turn": 1, "user": "first"},
+            {"turn": 2, "user": "second"},
+            {"turn": 3, "user": "third"},
+        )},),
+        subjects=(ModelSpec("gpt", "subject", "latest", "medium"),),
+        judges=(ModelSpec("qwen", "judge", "judge", "medium"),),
+        subject_transport=subject,
+        judge_transport=lambda *_args: {"text": _judge_json(rule, 3)},
+        rating_rule=rule,
+        checkpoint_path=checkpoint,
+    )
+
+    first = run_matrix(**kwargs)
+    assert [row["status"] for row in first] == ["PASS", "UNAVAILABLE", "PASS"]
+    with pytest.raises(KeyboardInterrupt, match="interrupted retry"):
+        run_matrix(**kwargs, resume=True, retry_unavailable=True)
+
+    plain_resume = run_matrix(**kwargs, resume=True)
+    assert [row["status"] for row in plain_resume] == [
+        "PASS", "PASS", "UNAVAILABLE",
+    ]
+    assert [row["answer"]["text"] for row in plain_resume] == [
+        "g2-t1", "g2-t2", "",
+    ]
+    assert plain_resume[2]["answer"]["error_type"] == "RETRY_IN_PROGRESS"
+
+    recovered = run_matrix(**kwargs, resume=True, retry_unavailable=True)
+
+    assert [row["status"] for row in recovered] == ["PASS"] * 3
+    assert [row["answer"]["text"] for row in recovered] == [
+        "g3-t1", "g3-t2", "g3-t3",
+    ]
 
 
 def test_matrix_refuses_checkpoint_locked_by_another_writer(tmp_path: Path) -> None:

@@ -15,12 +15,13 @@ import json
 import os
 from pathlib import Path
 import re
+from statistics import median
 import threading
 import time
 from typing import Any, Callable, Mapping, Sequence
 
 from .rules import RatingRule
-from .methodology_metrics import self_judging
+from .methodology_metrics import robust_dimension_summary, self_judging
 from .methodology_runtime import build_matrix_summaries, run_attribution_pass
 
 try:
@@ -491,6 +492,13 @@ def _checkpoint_state(path: Path, contract_sha256: str, *, allow_legacy: bool) -
                     str(event.get("case_id", "")),
                     int(event.get("turn", 0)),
                 ))
+                for key in tuple(judgements):
+                    if key[0] == answer_id:
+                        del judgements[key]
+                for key in tuple(cells):
+                    if key[0] == answer_id:
+                        del cells[key]
+                attributions.pop(answer_id, None)
                 answers[answer_id] = {**dict(event), "answer_id": answer_id}
             elif event_type == "judgement" and isinstance(event.get("judgement"), Mapping):
                 judge = event.get("judge", {})
@@ -706,7 +714,7 @@ def _string_sequence(value: Any) -> tuple[str, ...] | None:
     return tuple(str(item) for item in value)
 
 
-def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequence[ModelSpec], *, subject_transport: Callable[[ModelSpec, str], Mapping[str, Any]], judge_transport: Callable[[ModelSpec, str], Mapping[str, Any]], rating_rule: RatingRule, checkpoint_path: Path | None = None, resume: bool = False, allow_legacy_checkpoint: bool = False, subject_concurrency: int = 1, judge_concurrency: int = 1, max_in_flight: int | None = None, per_provider_concurrency: int = 1, attribution_provider: Callable[[Mapping[str, Any]], str] | None = None, attribution_judge_version: str = "attribution-judge/v1") -> list[dict[str, Any]]:
+def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequence[ModelSpec], *, subject_transport: Callable[[ModelSpec, str], Mapping[str, Any]], judge_transport: Callable[[ModelSpec, str], Mapping[str, Any]], rating_rule: RatingRule, checkpoint_path: Path | None = None, resume: bool = False, retry_unavailable: bool = False, allow_legacy_checkpoint: bool = False, subject_concurrency: int = 1, judge_concurrency: int = 1, max_in_flight: int | None = None, per_provider_concurrency: int = 1, attribution_provider: Callable[[Mapping[str, Any]], str] | None = None, attribution_judge_version: str = "attribution-judge/v1", isolate_self_judging: bool = False) -> list[dict[str, Any]]:
     """Run the matrix while appending durable answer/judgement/cell checkpoints.
 
     Checkpoints are JSONL events, intentionally separate from the public
@@ -719,6 +727,8 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
         raise ValueError("max_in_flight must be at least 1")
     if per_provider_concurrency < 1:
         raise ValueError("per_provider_concurrency must be at least 1")
+    if retry_unavailable and not resume:
+        raise ValueError("retry_unavailable requires resume")
     case_list = tuple(cases)
     subject_list = tuple(subjects)
     judge_list = tuple(judges)
@@ -734,6 +744,7 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
         "judges": [asdict(judge) for judge in judge_list],
         "rating_rule": _json_value(rating_rule),
         "attribution": {"enabled": attribution_provider is not None, "judge_version": attribution_judge_version},
+        "isolate_self_judging": isolate_self_judging,
     }).encode("utf-8")).hexdigest()
     prior_answers: dict[str, dict[str, Any]] = {}
     prior_judgements: dict[tuple[str, str], dict[str, Any]] = {}
@@ -789,11 +800,41 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
         lane_id = f"lane:{subject.id}:{case_id}"
         answer_ids = [_answer_id(subject, case_id, int(_field(turn, "turn", 0))) for turn in turns]
         completed = [answer_id in prior_answers for answer_id in answer_ids]
+        retry_subject_lane = bool(
+            retry_unavailable
+            and any(completed)
+            and (
+                not all(completed)
+                or any(
+                    _provider_response_from_mapping(prior_answers[answer_id]["answer"]).status != "PASS"
+                    for answer_id in answer_ids
+                    if answer_id in prior_answers
+                )
+            )
+        )
+        if retry_subject_lane:
+            for turn, answer_id in zip(turns, answer_ids):
+                invalidated = ProviderResponse(
+                    subject.provider,
+                    subject.model,
+                    "UNAVAILABLE",
+                    error="subject lane retry has not completed",
+                    error_type="RETRY_IN_PROGRESS",
+                )
+                savepoint({
+                    "event": "answer",
+                    "task_id": f"{lane_id}:turn:{int(_field(turn, 'turn', 0))}:retry-invalidation",
+                    "answer_id": answer_id,
+                    "case_id": case_id,
+                    "turn": int(_field(turn, "turn", 0)),
+                    "subject": asdict(subject),
+                    "answer": asdict(invalidated),
+                })
         start_case = getattr(subject_transport, "start_case", None)
-        if callable(start_case) and any(completed) and not all(completed):
+        if callable(start_case) and any(completed) and not all(completed) and not retry_subject_lane:
             raise ValueError(f"cannot safely resume partially completed stateful case {case_id} for {subject.id}")
         start_error: str | None = None
-        if callable(start_case) and not all(completed):
+        if callable(start_case) and (retry_subject_lane or not all(completed)):
             try:
                 with provider_gates[subject.provider], global_gate:
                     start_case(subject, case_id)
@@ -804,7 +845,7 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
             for turn in turns:
                 turn_number = int(_field(turn, "turn", 0))
                 answer_id = _answer_id(subject, case_id, turn_number)
-                if answer_id in prior_answers:
+                if answer_id in prior_answers and not retry_subject_lane:
                     continue
                 prompt = str(_field(turn, "user", ""))
                 answer = (
@@ -821,7 +862,7 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
                 generated.append((answer_id, event))
         finally:
             end_case = getattr(subject_transport, "end_case", None)
-            if callable(end_case) and not all(completed):
+            if callable(end_case) and (retry_subject_lane or not all(completed)):
                 end_case(subject, case_id)
         return lane_index, generated
 
@@ -861,8 +902,11 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
                 memory_metrics = _memory_observations(case, turn_number, answer.trace)
                 attribution = {"answer_id": answer_id, "status": "NOT_RUN", "result": None}
                 if attribution_provider is not None:
-                    attribution = prior_attributions.get(answer_id, {})
-                    if not attribution:
+                    attribution = (
+                        {} if answer_id in regenerated_answer_ids
+                        else prior_attributions.get(answer_id, {})
+                    )
+                    if not attribution and answer_id not in regenerated_answer_ids:
                         attribution = next((
                             dict(cell.get("attribution", {}))
                             for (cell_answer_id, _), cell in prior_cells.items()
@@ -903,7 +947,7 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
 
                 def record_judgement(index: int, judge: ModelSpec, judged: ProviderResponse, *, provider_called: bool) -> None:
                     if provider_called:
-                        savepoint({"event": "judgement", "task_id": f"{lane_id}:turn:{turn_number}:judge:{judge.id}", "answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": asdict(subject), "judge": asdict(judge), "judgement": asdict(judged)})
+                        savepoint({"event": "judgement", "task_id": f"{lane_id}:turn:{turn_number}:judge:{judge.id}", "answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": asdict(subject), "judge": asdict(judge), "judgement": asdict(judged), "dag_node_id": f"judge:{answer_id}:{judge.id}", "parent_node_ids": [f"answer:{answer_id}"]})
                     judged, scores, triggered_red_lines, red_line_evidence = _validated_scores(judged, rating_rule)
                     is_self_judging = self_judging(asdict(subject), asdict(judge))
                     row = {
@@ -915,23 +959,34 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
                         "triggered_red_lines": triggered_red_lines,
                         "red_line_evidence": red_line_evidence,
                         "self_judging": is_self_judging,
-                        "primary_eligible": not is_self_judging,
+                        "primary_eligible": not (isolate_self_judging and is_self_judging),
                         "memory_metrics": memory_metrics,
                         "attribution": attribution,
                         "weighted_score": weighted_score(scores, rating_rule),
                         "status": "PASS" if answer.status == judged.status == "PASS" else "UNAVAILABLE",
                     }
                     turn_rows[index] = row
-                    savepoint({"event": "cell", "task_id": f"{lane_id}:turn:{turn_number}:cell:{judge.id}", "row": {"answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": row["subject"], "judge": row["judge"], "judgement_status": judged.status, "judgement_error": judged.error, "judgement_error_type": judged.error_type, "scores": row["scores"], "expected_red_line_ids": row["expected_red_line_ids"], "triggered_red_lines": row["triggered_red_lines"], "red_line_evidence": row["red_line_evidence"], "self_judging": row["self_judging"], "primary_eligible": row["primary_eligible"], "memory_metrics": row["memory_metrics"], "attribution": row["attribution"], "weighted_score": row["weighted_score"], "status": row["status"]}})
+                    savepoint({"event": "cell", "task_id": f"{lane_id}:turn:{turn_number}:cell:{judge.id}", "dag_node_id": f"cell:{answer_id}:{judge.id}", "parent_node_ids": [f"answer:{answer_id}", f"judge:{answer_id}:{judge.id}"], "row": {"answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": row["subject"], "judge": row["judge"], "judgement_status": judged.status, "judgement_error": judged.error, "judgement_error_type": judged.error_type, "scores": row["scores"], "expected_red_line_ids": row["expected_red_line_ids"], "triggered_red_lines": row["triggered_red_lines"], "red_line_evidence": row["red_line_evidence"], "self_judging": row["self_judging"], "primary_eligible": row["primary_eligible"], "memory_metrics": row["memory_metrics"], "attribution": row["attribution"], "weighted_score": row["weighted_score"], "status": row["status"]}})
 
                 pending: list[tuple[int, ModelSpec]] = []
                 for index, judge in enumerate(judge_list):
                     prior_cell = prior_cells.get((answer_id, judge.id))
-                    if prior_cell is not None:
+                    invalidate_prior_cell = bool(
+                        answer_id in regenerated_answer_ids
+                        or (
+                            retry_unavailable
+                            and prior_cell is not None
+                            and prior_cell.get("status") != "PASS"
+                            and answer.status == "PASS"
+                            and evidence_error is None
+                        )
+                    )
+                    prior_judgement = prior_judgements.get((answer_id, judge.id))
+                    if prior_cell is not None and not invalidate_prior_cell:
                         turn_rows[index] = _resume_row(prior_answer or prior_answers[answer_id], prior_judgements.get((answer_id, judge.id)), prior_cell)
                         turn_rows[index]["answer"] = answer_data
-                    elif (answer_id, judge.id) in prior_judgements:
-                        prior_judged = _provider_response_from_mapping(prior_judgements[(answer_id, judge.id)]["judgement"])
+                    elif prior_judgement is not None and not invalidate_prior_cell:
+                        prior_judged = _provider_response_from_mapping(prior_judgement["judgement"])
                         record_judgement(index, judge, prior_judged, provider_called=False)
                     elif answer.status != "PASS":
                         record_judgement(index, judge, ProviderResponse(judge.provider, judge.model, "UNAVAILABLE", error="subject response unavailable", error_type="SUBJECT_UNAVAILABLE"), provider_called=False)
@@ -976,6 +1031,9 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
         for _, generated in generated_lanes:
             for answer_id, event in generated:
                 prior_answers[answer_id] = event
+        regenerated_answer_ids = {
+            answer_id for _, generated in generated_lanes for answer_id, _ in generated
+        }
 
         if subject_concurrency == 1:
             completed = [run_lane(lane) for lane in lanes]
@@ -1001,7 +1059,7 @@ def render_matrix_report(rows: Sequence[Mapping[str, Any]]) -> str:
     by_pair: dict[tuple[str, str], list[float]] = {}
     isolated_pairs = {
         (str(row["subject"]["id"]), str(row["judge"]["id"]))
-        for row in rows if row.get("self_judging")
+        for row in rows if row.get("self_judging") and not row.get("primary_eligible", True)
     }
     for row in rows:
         score = row.get("weighted_score")
@@ -1012,7 +1070,7 @@ def render_matrix_report(rows: Sequence[Mapping[str, Any]]) -> str:
         cells = []
         for judge in judges:
             values = by_pair.get((subject, judge), [])
-            cells.append(f"{sum(values)/len(values):.4f}" if values else "SELF_ISOLATED" if (subject, judge) in isolated_pairs else "UNAVAILABLE")
+            cells.append(f"{median(values):.4f}" if values else "SELF_ISOLATED" if (subject, judge) in isolated_pairs else "UNAVAILABLE")
         lines.append("| " + subject + " | " + " | ".join(cells) + " |")
     denominator = summaries["primary_denominator"]
     lines.extend([
@@ -1024,7 +1082,7 @@ def render_matrix_report(rows: Sequence[Mapping[str, Any]]) -> str:
     ])
     self_rows = [row for row in rows if row.get("self_judging")]
     if self_rows:
-        lines.extend(["", "## Self-judging cells (isolated)", "", "| Subject | Judge | Case | Turn | Weighted score | Status |", "| --- | --- | --- | ---: | ---: | --- |"])
+        lines.extend(["", "## Self-judging cells", "", "| Subject | Judge | Case | Turn | Weighted score | Status |", "| --- | --- | --- | ---: | ---: | --- |"])
         for row in self_rows:
             lines.append(f"| {row['subject']['id']} | {row['judge']['id']} | {row.get('case_id')} | {row.get('turn')} | {row.get('weighted_score')} | {row.get('status')} |")
     dimensions = sorted({str(name) for row in rows for name in row.get("scores", {})})
@@ -1034,7 +1092,7 @@ def render_matrix_report(rows: Sequence[Mapping[str, Any]]) -> str:
             cells = []
             for dimension in dimensions:
                 values = [row["scores"].get(dimension) for row in rows if row["subject"]["id"] == subject and row.get("primary_eligible", True) and isinstance(row.get("scores", {}).get(dimension), (int, float))]
-                cells.append(f"{sum(values)/len(values):.4f}" if values else "UNAVAILABLE")
+                cells.append(f"{median(values):.4f}" if values else "UNAVAILABLE")
             lines.append("| " + subject + " | " + " | ".join(cells) + " |")
         lines.extend(["", "## Dimension scores by subject and judge", "", "| Subject | Judge | " + " | ".join(dimensions) + " |", "| --- | --- | " + " | ".join("---:" for _ in dimensions) + " |"])
         for subject in subjects:
@@ -1042,9 +1100,16 @@ def render_matrix_report(rows: Sequence[Mapping[str, Any]]) -> str:
                 cells = []
                 for dimension in dimensions:
                     values = [row["scores"].get(dimension) for row in rows if row["subject"]["id"] == subject and row["judge"]["id"] == judge and row.get("primary_eligible", True) and isinstance(row.get("scores", {}).get(dimension), (int, float))]
-                    cells.append(f"{sum(values)/len(values):.4f}" if values else "UNAVAILABLE")
+                    cells.append(f"{median(values):.4f}" if values else "UNAVAILABLE")
                 lines.append("| " + subject + " | " + judge + " | " + " | ".join(cells) + " |")
-    lines.extend(["", "Self-judging cells are displayed but excluded from primary subject aggregates.", "", "## Operational telemetry", "", "| Subject | Judge | First character | First-character ms | Answer queue ms | Answer ms | Answer tokens | Answer attempts | Answer cached/write | Answer error | Judge queue ms | Judge ms | Judge tokens | Judge attempts | Judge cached/write | Cache hit ratio | Judge error | Status |", "| --- | --- | :---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"])
+        lines.extend(["", "## Dimension distribution by subject and judge", "", "| Subject | Judge | Dimension | Median | MAD | IQR | Range | N |", "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |"])
+        for subject in subjects:
+            for judge in judges:
+                matching = [row for row in rows if row["subject"]["id"] == subject and row["judge"]["id"] == judge]
+                for dimension in dimensions:
+                    summary = robust_dimension_summary(matching, dimension)
+                    lines.append(f"| {subject} | {judge} | {dimension} | {summary['median'] if summary['median'] is not None else 'UNAVAILABLE'} | {summary['mad'] if summary['mad'] is not None else 'UNAVAILABLE'} | {summary['iqr'] if summary['iqr'] is not None else 'UNAVAILABLE'} | {summary['range'] if summary['range'] is not None else 'UNAVAILABLE'} | {summary['n']} |")
+    lines.extend(["", "Self-judging cells are displayed and included in primary score aggregates by default; agreement statistics remain non-self descriptive checks.", "", "## Operational telemetry", "", "| Subject | Judge | First character | First-character ms | Answer queue ms | Answer ms | Answer tokens | Answer attempts | Answer cached/write | Answer error | Judge queue ms | Judge ms | Judge tokens | Judge attempts | Judge cached/write | Cache hit ratio | Judge error | Status |", "| --- | --- | :---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"])
     for row in rows:
         answer, judge = row["answer"], row["judgement"]
         lines.append(f"| {row['subject']['id']} | {row['judge']['id']} | {answer.get('first_char','')} | {answer.get('first_character_ms','')} | {answer.get('queue_ms','')} | {answer.get('elapsed_ms','')} | {answer.get('total_tokens','')} | {answer.get('attempt_count','')} | {answer.get('cached_input_tokens','')}/{answer.get('cache_write_tokens','')} | {answer.get('error_type','')} | {judge.get('queue_ms','')} | {judge.get('elapsed_ms','')} | {judge.get('total_tokens','')} | {judge.get('attempt_count','')} | {judge.get('cached_input_tokens','')}/{judge.get('cache_write_tokens','')} | {judge.get('cache_hit_ratio','')} | {judge.get('error_type','')} | {row.get('status')} |")
@@ -1129,6 +1194,14 @@ def write_matrix_workbook(rows: Sequence[Mapping[str, Any]], path: Path) -> None
     append_text_safe(red_line_sheet, ["red_line_id", "interpretation", "eligible_n", "missing_n", "krippendorff_alpha_nominal", "pairwise_exact_json"])
     for identifier, report in summaries["red_line_agreement"].items():
         append_text_safe(red_line_sheet, [identifier, report["interpretation"], report["eligible_n"], report["missing_n"], report["krippendorff_alpha_nominal"], json.dumps(report["pairwise_exact_agreement"], ensure_ascii=False)])
+    stats_sheet = workbook.create_sheet("Dimension_Statistics")
+    append_text_safe(stats_sheet, ["subject_id", "judge_id", "dimension", "raw_scores_json", "median", "mad", "iqr", "range", "n"])
+    for subject in subjects:
+        for judge in judges:
+            matching = [row for row in rows if row["subject"]["id"] == subject and row["judge"]["id"] == judge]
+            for dimension in dimensions:
+                summary = robust_dimension_summary(matching, dimension)
+                append_text_safe(stats_sheet, [subject, judge, dimension, json.dumps(summary["raw_scores"], ensure_ascii=False), summary["median"], summary["mad"], summary["iqr"], summary["range"], summary["n"]])
     path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(path)
 

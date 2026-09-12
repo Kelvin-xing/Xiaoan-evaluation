@@ -7,7 +7,7 @@ import json
 from typing import Any, Callable, Mapping, Sequence
 
 from .attribution_client import AttributionClient
-from .methodology_metrics import agreement_report, red_line_agreement_report, summarize_memory_metrics
+from .methodology_metrics import agreement_report, red_line_agreement_report, robust_dimension_summary, summarize_memory_metrics
 
 
 def run_attribution_pass(answers: Sequence[Mapping[str, Any]], provider: Callable[[Mapping[str, Any]], str], *, judge_version: str) -> list[dict[str, Any]]:
@@ -20,14 +20,14 @@ def run_attribution_pass(answers: Sequence[Mapping[str, Any]], provider: Callabl
         trace = answer.get("trace")
         snapshot = trace.get("effective_context_snapshot") if isinstance(trace, Mapping) else None
         if str(answer.get("status", "PASS")) != "PASS" or not isinstance(snapshot, Mapping):
-            output.append({"answer_id": answer_id, "status": "UNAVAILABLE", "result": None, "error_type": "ANSWER_OR_SNAPSHOT_UNAVAILABLE"})
+            output.append({"answer_id": answer_id, "status": "UNAVAILABLE", "result": None, "error_type": "ANSWER_OR_SNAPSHOT_UNAVAILABLE", "dag_node_id": f"attribution:{answer_id}", "parent_node_ids": [f"answer:{answer_id}"]})
             continue
         try:
             result = client.judge(str(text), snapshot)
             normalized = json.loads(json.dumps(asdict(result), ensure_ascii=False))
-            output.append({"answer_id": answer_id, "status": "AVAILABLE", "result": normalized, "error_type": None})
+            output.append({"answer_id": answer_id, "status": "AVAILABLE", "result": normalized, "error_type": None, "dag_node_id": f"attribution:{answer_id}", "parent_node_ids": [f"answer:{answer_id}"]})
         except Exception as exc:
-            output.append({"answer_id": answer_id, "status": "UNAVAILABLE", "result": None, "error_type": type(exc).__name__, "error": str(exc)})
+            output.append({"answer_id": answer_id, "status": "UNAVAILABLE", "result": None, "error_type": type(exc).__name__, "error": str(exc), "dag_node_id": f"attribution:{answer_id}", "parent_node_ids": [f"answer:{answer_id}"]})
     return output
 
 
@@ -43,6 +43,7 @@ def build_matrix_summaries(rows: Sequence[Mapping[str, Any]], *, memory_results:
             "operationally_unavailable_n": sum(row.get("status") != "PASS" for row in rows),
         },
         "agreement": {dimension: agreement_report(rows, dimension) for dimension in dimensions},
+        "dimensions": {dimension: robust_dimension_summary(rows, dimension) for dimension in dimensions},
         "red_line_agreement": {identifier: red_line_agreement_report(rows, identifier) for identifier in red_line_ids},
         "memory": summarize_memory_metrics(memory_results),
         "attribution": {"status": attribution_status, "attempted_n": len(attribution_results), "eligible_n": attribution_available, "missing_n": len(attribution_results) - attribution_available},

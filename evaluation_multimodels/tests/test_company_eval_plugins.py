@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 from types import SimpleNamespace
+from email.message import Message
+from urllib.error import HTTPError
 
 import company_eval_plugins
 import pytest
@@ -87,6 +90,64 @@ def test_anthropic_explicit_cache_keeps_stable_and_dynamic_parts_separate(monkey
     assert result["_xiaoan_attempt_count"] == 1
     assert result["_xiaoan_retry_errors"] == []
     assert json.loads(result["text"]) == {"red_lines": [], "dimensions": {}}
+
+
+def test_provider_specific_endpoint_takes_precedence(monkeypatch) -> None:
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["authorization"] = request.headers["Authorization"]
+        return Response()
+
+    monkeypatch.setattr(company_eval_plugins, "urlopen", fake_urlopen)
+    monkeypatch.setenv("GLOBALAI_API_KEY", "shared-key")
+    monkeypatch.setenv("GLOBALAI_API_BASE", "https://global.example/v1")
+    monkeypatch.setenv("XIAOAN_QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("XIAOAN_QWEN_ENDPOINT", "https://qwen.example/v1")
+    monkeypatch.setenv("GLOBALAI_MAX_RETRIES", "0")
+
+    company_eval_plugins.multimodel_transport(
+        ModelSpec("qwen", "latest", "latest", "medium"), "hello"
+    )
+
+    assert captured["url"] == "https://qwen.example/v1/chat/completions"
+    assert captured["authorization"] == "Bearer qwen-key"
+
+
+def test_multimodel_transport_preserves_globalai_error_fields(monkeypatch) -> None:
+    error = HTTPError(
+        "https://global.example/v1/chat/completions",
+        500,
+        "upstream failure",
+        Message(),
+        io.BytesIO(json.dumps({"error": {"code": "model_unavailable", "type": "upstream_error", "message": "model route is unavailable"}}).encode()),
+    )
+    monkeypatch.setattr(
+        company_eval_plugins,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setenv("GLOBALAI_API_KEY", "test-key")
+    monkeypatch.setenv("GLOBALAI_MAX_RETRIES", "0")
+
+    with pytest.raises(
+        company_eval_plugins.ProviderCallError,
+        match="model_unavailable.*model route is unavailable",
+    ):
+        company_eval_plugins.multimodel_transport(
+            ModelSpec("gpt", "subject", "model", "medium"), "hello"
+        )
 
 
 def test_judge_requests_schema_constrained_json(monkeypatch) -> None:
@@ -177,6 +238,108 @@ def test_responses_judge_uses_explicit_stable_prefix_cache_breakpoint(monkeypatc
     assert result.usage["input_tokens_details"]["cached_tokens"] == 80
 
 
+def test_judge_transport_unfences_markdown_json(monkeypatch) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            content = "```json\n" + json.dumps({"red_lines": [], "dimensions": {}}) + "\n```"
+            return json.dumps({
+                "choices": [{"message": {"content": content}}]
+            }).encode()
+
+    monkeypatch.setattr(company_eval_plugins, "urlopen", lambda *_args, **_kwargs: Response())
+    monkeypatch.setenv("GLOBALAI_API_KEY", "test-key")
+    result = company_eval_plugins.multimodel_transport(
+        ModelSpec("gpt", "judge", "judge", "medium"), "judge prompt"
+    )
+    assert json.loads(result["choices"][0]["message"]["content"]) == {"red_lines": [], "dimensions": {}}
+
+
+def test_judge_transport_retries_empty_success_response(monkeypatch) -> None:
+    payloads = iter([
+        {"choices": [{"message": {"content": ""}}]},
+        {"choices": [{"message": {"content": '{"red_lines":[],"dimensions":{"行动赋权":2}}'}}]},
+    ])
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            calls.append(1)
+            return json.dumps(next(payloads)).encode()
+
+    monkeypatch.setattr(company_eval_plugins, "urlopen", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(company_eval_plugins.time, "sleep", lambda _delay: None)
+    monkeypatch.setenv("GLOBALAI_API_KEY", "test-key")
+    monkeypatch.setenv("GLOBALAI_MAX_RETRIES", "1")
+    prompt = json.dumps({
+        "xiaoan_prompt_contract": "matrix-judge-prompt/v1",
+        "stable_prefix": {
+            "modules": [{"name": "行动赋权"}],
+            "red_lines": [],
+        },
+        "dynamic_input": {"answer": "answer"},
+    })
+
+    result = company_eval_plugins.multimodel_transport(
+        ModelSpec("qwen", "judge", "judge", "medium"), prompt
+    )
+
+    assert len(calls) == 2
+    assert result["_xiaoan_attempt_count"] == 2
+    assert result["_xiaoan_retry_errors"] == ["EMPTY_RESPONSE"]
+
+
+def test_judge_transport_retries_schema_invalid_success_response(monkeypatch) -> None:
+    invalid = {"red_lines": "[]", "dimensions": {"prop_0": 2}}
+    valid = {"red_lines": [], "dimensions": {"行动赋权": 2}}
+    payloads = iter([
+        {"choices": [{"message": {"content": json.dumps(invalid)}}]},
+        {"choices": [{"message": {"content": json.dumps(valid)}}]},
+    ])
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            calls.append(1)
+            return json.dumps(next(payloads)).encode()
+
+    monkeypatch.setattr(company_eval_plugins, "urlopen", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(company_eval_plugins.time, "sleep", lambda _delay: None)
+    monkeypatch.setenv("GLOBALAI_API_KEY", "test-key")
+    monkeypatch.setenv("GLOBALAI_MAX_RETRIES", "1")
+    prompt = json.dumps({
+        "xiaoan_prompt_contract": "matrix-judge-prompt/v1",
+        "stable_prefix": {
+            "modules": [{"name": "行动赋权"}],
+            "red_lines": [],
+        },
+        "dynamic_input": {"answer": "answer"},
+    })
+
+    result = company_eval_plugins.multimodel_transport(
+        ModelSpec("qwen", "judge", "judge", "medium"), prompt
+    )
+
+    assert len(calls) == 2
+    assert result["_xiaoan_attempt_count"] == 2
+    assert result["_xiaoan_retry_errors"] == ["INVALID_JUDGE_SCHEMA"]
 def test_judge_accepts_provider_returning_structured_content_as_a_string(
     monkeypatch,
 ) -> None:
@@ -280,6 +443,34 @@ def test_primary_judge_defaults_to_documented_model(monkeypatch) -> None:
 def test_recommendation_prompt_requests_chinese_user_visible_text() -> None:
     assert "繁體中文" in company_eval_plugins.RECOMMENDATION_INSTRUCTIONS
     assert "problem_statement" in company_eval_plugins.RECOMMENDATION_INSTRUCTIONS
+
+
+def test_chatflow_transport_uses_separate_long_outer_timeout(monkeypatch) -> None:
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"conversation_id":"conv-1"}'
+
+    class Opener:
+        def open(self, _request, timeout):
+            captured["timeout"] = timeout
+            return Response()
+
+    transport = company_eval_plugins.XiaoAnChatflowTransport()
+    transport._state().opener = Opener()
+    monkeypatch.setenv("XIAOAN_PROVIDER_TIMEOUT", "120")
+    monkeypatch.delenv("XIAOAN_CHATFLOW_TIMEOUT", raising=False)
+
+    transport._json("POST", "http://test.invalid/v1/conversations")
+
+    assert captured["timeout"] == 600.0
 
 
 def test_openai_client_uses_shared_custom_base_url(monkeypatch) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Mapping, Protocol
 
 from .judge import JudgeResult, parse_judge_response, validate_claim_evidence
@@ -14,9 +15,13 @@ class JudgeProvider(Protocol):
 
 class JudgeClient:
     def __init__(self, provider: JudgeProvider | Callable[[Mapping[str, Any]], str],
-                 rating_rule: RatingRule) -> None:
+                 rating_rule: RatingRule, *, judge_id: str | None = None,
+                 provider_id: str | None = None, model: str | None = None) -> None:
         self._provider = provider
         self._rating_rule = rating_rule
+        self.judge_id = judge_id or os.getenv("XIAOAN_JUDGE_ID", "judge:configured")
+        self.provider_id = provider_id or os.getenv("XIAOAN_JUDGE_PROVIDER", "configured")
+        self.model = model or os.getenv("XIAOAN_JUDGE_MODEL", "configured")
 
     def judge(self, request: Mapping[str, Any]) -> JudgeResult:
         """Invoke an injected provider once and validate its untrusted output."""

@@ -179,8 +179,10 @@ def _parser() -> argparse.ArgumentParser:
     matrix.add_argument("--subjects", help="JSON file containing subject ModelSpec objects")
     matrix.add_argument("--judges", help="JSON file containing judge ModelSpec objects")
     matrix.add_argument("--resume", action="store_true", help="reuse completed answers and judge cells from matrix-checkpoint.jsonl")
+    matrix.add_argument("--retry-unavailable", action="store_true", help="with --resume, retry failed subject lanes and unavailable Judge cells")
     matrix.add_argument("--checkpoint", help="private checkpoint path (default: sibling .matrix-audit directory)")
     matrix.add_argument("--allow-legacy-checkpoint", action="store_true", help="explicitly trust a pre-contract-hash checkpoint")
+    matrix.add_argument("--isolate-self-judging", action="store_true", help="exclude subject/judge self-evaluations from primary aggregates")
     matrix.add_argument("--subject-concurrency", type=int, default=2, help="parallel independent subject/case lanes (default: 2)")
     matrix.add_argument("--judge-concurrency", type=int, default=3, help="parallel stateless Judge calls per answer (default: 3)")
     matrix.add_argument("--max-in-flight", type=int, default=3, help="hard cap for all simultaneous provider calls (default: 3)")
@@ -221,11 +223,13 @@ def _matrix(args: argparse.Namespace) -> int:
         rating_rule=rule,
         checkpoint_path=checkpoint_path,
         resume=bool(getattr(args, "resume", False)),
+        retry_unavailable=bool(getattr(args, "retry_unavailable", False)),
         allow_legacy_checkpoint=bool(getattr(args, "allow_legacy_checkpoint", False)),
         subject_concurrency=int(getattr(args, "subject_concurrency", 2)),
         judge_concurrency=int(getattr(args, "judge_concurrency", 3)),
         max_in_flight=int(getattr(args, "max_in_flight", 3)),
         per_provider_concurrency=int(getattr(args, "per_provider_concurrency", 1)),
+        isolate_self_judging=bool(getattr(args, "isolate_self_judging", False)),
         attribution_provider=attribution_provider,
         attribution_judge_version=str(getattr(args, "attribution_judge_version", "attribution-judge/v1")),
     )

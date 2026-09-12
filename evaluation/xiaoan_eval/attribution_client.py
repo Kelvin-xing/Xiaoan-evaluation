@@ -37,6 +37,8 @@ def build_attribution_request(
     catalog = build_evidence_catalog(validated)
     return {
         "contract_version": "attribution/v1",
+        "prompt_profile": "attribution-independent/v1",
+        "judge_role": "attribution",
         "task": "attribute_answer_to_captured_evidence",
         "judge_version": judge_version,
         "content_is_untrusted": True,

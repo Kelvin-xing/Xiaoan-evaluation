@@ -12,10 +12,38 @@ import hashlib
 import json
 import math
 from typing import Any, Callable, Mapping, Sequence
+from statistics import median
 
 
 PAIRWISE_CONTRACT_VERSION = "pairwise/v1"
 PAIRWISE_WINNERS = frozenset({"LEFT", "RIGHT", "TIE", "INVALID"})
+
+
+def robust_dimension_summary(rows: Sequence[Mapping[str, Any]], dimension: str) -> dict[str, Any]:
+    """Summarize raw Judge scores without selecting a modal/majority score."""
+    values = [
+        float(row["scores"][dimension])
+        for row in rows
+        if row.get("primary_eligible", True)
+        and isinstance(row.get("scores"), Mapping)
+        and isinstance(row["scores"].get(dimension), (int, float))
+        and not isinstance(row["scores"].get(dimension), bool)
+    ]
+    if not values:
+        return {"raw_scores": [], "median": None, "mad": None, "iqr": None, "range": None, "n": 0}
+    ordered = sorted(values)
+    med = median(ordered)
+    deviations = [abs(value - med) for value in ordered]
+    q1 = median(ordered[: (len(ordered) + 1) // 2])
+    q3 = median(ordered[len(ordered) // 2 :])
+    return {
+        "raw_scores": ordered,
+        "median": med,
+        "mad": median(deviations),
+        "iqr": q3 - q1,
+        "range": max(ordered) - min(ordered),
+        "n": len(ordered),
+    }
 
 
 @dataclass(frozen=True)
@@ -30,6 +58,8 @@ class PairwiseDecision:
     status: str
     rationale: str
     control_digest: str
+    dag_node_id: str = ""
+    parent_node_ids: tuple[str, ...] = ()
 
 
 def control_digest(contract: Mapping[str, Any]) -> str:
@@ -64,6 +94,8 @@ def pairwise_decision(payload: Mapping[str, Any]) -> PairwiseDecision:
         status=str(status),
         rationale=_text(payload, "rationale"),
         control_digest=_text(payload, "control_digest"),
+        dag_node_id=str(payload.get("dag_node_id", "")),
+        parent_node_ids=tuple(str(item) for item in (payload.get("parent_node_ids") or ())),
     )
 
 
@@ -122,6 +154,8 @@ def run_pairwise_pass(
                 "left_answer_id": str(left["answer_id"]), "right_answer_id": str(right["answer_id"]),
                 "judge_id": str(judge_id), "display_order": order, "control_digest": digest,
                 "status": raw.get("status", "AVAILABLE"),
+                "dag_node_id": f"pairwise:{first_id}:{second_id}:{judge_id}",
+                "parent_node_ids": [f"answer:{first_id}", f"answer:{second_id}"],
             }))
     return decisions
 
