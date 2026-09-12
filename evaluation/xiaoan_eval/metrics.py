@@ -177,21 +177,14 @@ def evaluate_trace_completeness(trace: Mapping[str, Any]) -> MetricResult:
 def evaluate_memory_checkpoint(
     checkpoint: MemoryCheckpoint, trace: Mapping[str, Any]
 ) -> MetricResult:
-    state = trace.get("state")
-    if not isinstance(state, Mapping):
-        return _error("state trace is missing")
-    facts = state.get("memory_facts")
-    used = state.get("memory_used")
-    if "memory_facts" not in state and "memory_used" not in state:
-        return _skip("memory telemetry was not reported by chatflow debug")
-    if not isinstance(facts, Sequence) or isinstance(facts, (str, bytes)):
-        return _error("state.memory_facts must be an array")
-    missing = set(checkpoint.facts) - {str(item) for item in facts}
-    if missing:
-        return _fail("required memory facts were not retained", tuple(sorted(missing)), 0.0)
-    if used is not True:
-        return _fail("retained memory was not used as required", (checkpoint.usage,), 0.0)
-    return _pass("required memory was retained and used", checkpoint.facts)
+    from .memory_metrics import memory_observation
+
+    observation = memory_observation(checkpoint, trace)
+    if observation["status"] == "skip":
+        return _skip(observation["reason"])
+    if observation["status"] == "fail":
+        return _fail(observation["reason"], checkpoint.facts, 0.0)
+    return _pass(observation["reason"], checkpoint.facts)
 
 
 def _expected_value(expected: tuple[str, ...], trace: Mapping[str, Any], section: str,

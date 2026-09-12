@@ -1,151 +1,136 @@
-# XiaoAn Evaluation
+# evaluation_multimodels｜Subject × Judge 交叉評估
 
-中文运行、报告阅读、人工审核与 Judge 校准指南：[`USAGE.zh-CN.md`](USAGE.zh-CN.md)。
+**2026-09-13 · scoring `response-effectiveness/v2` · 專用 matrix workbook**
 
-The current public evaluation contract is deliberately small: every ordinary run publishes exactly two files.
+本 project 將相同 case 的凍結答案交给不同Judge，分離subject表現、Judge尺度、自評及provider缺失。它提供direct model與完整Chatflow兩種subject transport；兩者不是同一評估對象。普通run仍可用，操作見 [evaluation](../../evaluation/README/README.md)。
 
-- `results.xlsx` is the formal, human-readable evidence and baseline source.
-- `report.md` is the detailed decision, optimization, experiment, and limitation report.
+完整設計、公式與能力邊界：[Shared Guide](../../evaluation/README_SHARED.md)。本次修復：[v2測量契約](measurement-contract-v2.zh-HK.md)。
 
-JSON or JSONL may still be accepted as a bounded legacy input for `report`, experiment component runs, and stability repeats. They are not public deliverables and must not be treated as a second official result.
+## 1. 核心流程
 
-## Run
-
-```bash
-xiaoan-eval run test-cases \
-  --base-url http://localhost:8000 \
-  --judge-plugin company_eval_plugins:judge \
-  --context-provider company_eval_plugins:authoritative_context \
-  --manifest manifest.json \
-  --output runs/<run-id>
+```mermaid
+flowchart LR
+ C[Case × Subject lanes] --> A[同lane順序生成]
+ A --> B[全批完成或UNAVAILABLE]
+ B --> F[凍結answer artifacts]
+ F --> J[多Judge評同一答案]
+ J --> V[Schema與evidence驗證]
+ V --> S[完整case計分 / 自評隔離]
+ S --> R[Matrix workbook與report]
+ F --> T[可選獨立Attribution]
+ T --> R
 ```
 
-The output directory must be empty or contain a valid existing pair. Unknown files are refused and never deleted implicitly. Full `preflight` remains a separate command; an ordinary run performs only the parsing, schema, PII/input-integrity, and output-target guards required for that operation.
+每個answer identity固定，Judge不能重新生成subject答案。跨case/subject可並行，conversation內不並行。失敗lane/cell保留原因，其他可用觀察繼續保存；整案缺輪不進完整case總分。
 
-## Workbook map
-
-| Sheet | Grain and purpose |
-| --- | --- |
-| `00_Overview` | Decision dashboard: artifact state, verdict, overall/dimension scores, coverage, speed, baseline, experiment, and stability state. |
-| `01_Cases` | One row per subject case with automatic/human/final score provenance, hard gates, failure stage, review status, cohorts, and latency. |
-| `02_Turns` | One row per turn with transcript links, route/ground/safety context, performance, review state, and automatic/human/final turn scores. |
-| `03_Metrics` | One row per case/turn/metric/source plus run-level RAG/V3 aggregates. Zero is numeric zero; missing states remain explicit. |
-| `04_Baseline` | Domain/grain/key deltas and comparability reasons. |
-| `05_Experiments` | Hypothesis, control, candidate, repetitions, target/non-target results, guardrails, verdict, and next action. |
-| `06_Human_Review` | Review lifecycle and provenance. Reviewer ID is an operational label, not authenticated identity. |
-| `07_Stability` | Optional repeatability facts and classification; never a correctness score. |
-| `08_Metadata` | Schema, generation, lifecycle, manifest, and logical digests. |
-| `09_Data_Dictionary` | Column meanings and status semantics. |
-| `02_Turns` (`row_kind=text`) | Lossless ordered chunks for full user and assistant text. |
-
-## Formal baseline
-
-Pass a prior final workbook to a new run:
+## 2. 安裝
 
 ```bash
-xiaoan-eval run test-cases ... \
-  --baseline runs/<baseline-id>/results.xlsx \
-  --output runs/<candidate-id>
+cd evaluation_multimodels
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[test]'
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. python -m pytest -q
 ```
 
-The loader verifies OOXML safety, fixed schema, logical digests, `FINAL` state, and the quality measurement contract. A changed rating rule, rule schema, or judge prompt suppresses the quality comparison instead of producing a misleading global delta. Partial case overlap is reported as partial and does not produce a global improvement claim.
+與evaluation分開virtualenv，兩者CLI及import名稱相同。實際Chatflow與知識服務需另行部署，standalone repo不包含它們。Provider設定讀本機environment／`.env`；不要將credentials、私有trace或runs上傳Git。
 
-## Human review
+## 3. Registry與case選擇
 
-Review is exception-driven. A pending run remains a complete official pair with artifact state `PENDING_REVIEW`.
+預設10subjects（五provider×latest/second）及5Judges。這是程式registry，不保證model仍為市場最新或provider可用；使用 `--subjects`、`--judges` 固定本次真正model IDs、tier與reasoning_effort，可跑5×5。
 
-Export one blinded transport workbook outside the deliverable directory:
+JSON檔是ModelSpec object array；以下是**格式示例**，`YOUR_AVAILABLE_MODEL_ID`須替換：
 
-```bash
-xiaoan-eval export-human-review runs/<run-id> \
-  --rating-rule "ratings rule.yml" \
-  --output private-review/<run-id>-review.xlsx
+```json
+[{"provider":"gpt","model":"YOUR_AVAILABLE_MODEL_ID","tier":"latest","reasoning_effort":"medium"}]
 ```
 
-The packet contains:
+默認正式cases為74案217輪，REVIEWED不等於APPROVED_AGGREGATE。response oracle=0、memory僅6個use。九份proposed草案不自動載入，不把未批准草案算進正式品質／能力覆蓋。
 
-- `00_Instructions`: purpose, anchored scoring, privacy, completion, and escalation rules.
-- `01_Review_Queue`: the bound case/turn/response and editable reviewer metadata.
-- `02_Review_Items`: every red line and rubric dimension; only blue cells are editable.
-- `03_Evidence`: packet-bound evidence references and relevant conversation content.
+## 4. 執行模式
 
-It contains no automatic scores. The reviewer fills every anchored score/red-line judgment, cites only listed evidence refs, records a timezone timestamp, and returns the same XLSX. `reviewer_id` is a self-declared operational label; this workflow intentionally does not authenticate the person filling the workbook.
-
-Import and regenerate the same official pair:
+### A. 完整Chatflow mode
 
 ```bash
-xiaoan-eval import-human-review private-review/<run-id>-review.xlsx \
-  --rating-rule "ratings rule.yml" \
-  --output runs/<run-id>
-```
-
-Import is all-or-nothing. It rejects formulas, unsafe OOXML, stale generations, changed response/rubric/evidence bindings, changed immutable cells, incomplete judgments, non-anchored scores, and unknown evidence refs. Automatic, human, and final rows remain separate. AI/human red-line disagreement produces `NEEDS_ADJUDICATION` and leaves the affected final score empty.
-
-Resolve each disputed turn by explicitly selecting the accepted fact source and recording a rationale:
-
-```bash
-xiaoan-eval adjudicate runs/<run-id> \
-  --case TC-01 --turn 1 --decision human \
-  --adjudicator adjudicator-label \
-  --rationale "Human red-line evidence is accepted after evidence review."
-```
-
-The adjudicator label is also self-declared and unauthenticated. The command appends adjudicated metric provenance and regenerates the same pair; it does not erase either original source.
-
-## Stability
-
-Stability means repeatability under fixed deployment, model, prompt, knowledge, hyperparameter, and case/turn controls. It does not mean correctness. A consistently wrong answer can be highly stable.
-
-```bash
-xiaoan-eval stability \
-  --runs private-repeats/run-101.jsonl private-repeats/run-202.jsonl private-repeats/run-303.jsonl \
-  --manifests private-repeats/manifest-101.json private-repeats/manifest-202.json private-repeats/manifest-303.json \
-  --output runs/<final-run-id>
-```
-
-The command attaches route modal agreement, ground Jaccard, response-hash agreement, score variance, pass/fail flips, hard-gate consistency, latency variance, retry variance, and timeout rate to the existing final pair. Without configured thresholds the classification is `DESCRIPTIVE_ONLY`; if not run, the workbook says `NOT_MEASURED`.
-
-## Controlled experiment
-
-Experiment component runs are private inputs. `experiment`, `auto-experiment`, and `auto-file-experiment` attach a controlled conclusion to the existing final pair rather than creating a third public file. Recommendations in `report.md` remain hypotheses until such evidence is attached.
-
-## Legacy conversion
-
-```bash
-xiaoan-eval report private-legacy/case-results.jsonl --output runs/<converted-id>
-```
-
-This produces the same two-file pair. If the legacy input lacks manifest and case/oracle contract metadata, it is useful for reading but is not a trustworthy formal baseline.
-# 多模型矩陣評估
-
-`xiaoan_eval matrix` 會以相同用例建立 XiaoAn subject × judge 矩陣。預設為五家供應商各兩個 subject 配置（最新模型/medium、次新模型/high）乘五個 judge（均為 medium），即 10×5。每個 answer 在 `All_Answers` 只保留一次，Judge JSON、分數與遙測則在 `All_Judgements` 以 `answer_id` 關聯；服務商或 Judge 失敗記為 `UNAVAILABLE`，不進入分母。完整 Chatflow trace 只寫入私有 checkpoint。輸出包含總 `results.xlsx`、總 `report.md`，以及 `pairs/` 下每個 subject × judge 的獨立 Excel。
-
-```bash
-# Terminal 1: start the XiaoAn subject chatflow. It reads
-# evaluation_multimodels/.env directly.
-.venv/bin/uvicorn server:create_app \
-  --factory --app-dir ../tech_multimodels/chatflow/poc \
-  --host 127.0.0.1 --port 8000
-
-# Terminal 2: run the 10x5 matrix.
-PYTHONPATH=. python -m xiaoan_eval matrix test-cases \
+xiaoan-eval matrix test-cases \
   --subject-transport company_eval_plugins:xiaoan_chatflow_transport \
   --judge-transport company_eval_plugins:multimodel_transport \
-  --output runs/matrix-$(date +%Y%m%d%H%M%S)
+  --subjects private/subjects.json --judges private/judges.json \
+  --rating-rule 'ratings rule.yml' \
+  --subject-concurrency 2 --judge-concurrency 3 \
+  --max-in-flight 3 --per-provider-concurrency 1 \
+  --output runs/team-matrix
 ```
 
-GlobalAI 使用統一的 OpenAI-compatible endpoint `https://globalai.vip/v1/chat/completions`。請把 key 填入 `evaluation_multimodels/.env` 的 `GLOBALAI_API_KEY=...`；Judge 與 `tech_multimodels` chatflow 會讀取同一個檔案。程式使用 `Authorization: Bearer <key>`，並對 HTTP 429、暫時性 5xx、空 Judge 回覆與不符合 rubric schema 的 Judge 回覆做 bounded retry；可用 `GLOBALAI_API_BASE`、`GLOBALAI_MAX_RETRIES`、`XIAOAN_PROVIDER_TIMEOUT` 覆寫單次 provider 請求。若某個模型家族需要獨立供應商，可設定 `XIAOAN_<PROVIDER>_API_KEY` 與 `XIAOAN_<PROVIDER>_ENDPOINT`；provider-specific 設定優先於 GlobalAI 共用設定，endpoint 可填 base URL 或完整 API 路徑。外層 Chatflow 請求另用 `XIAOAN_CHATFLOW_TIMEOUT`，預設 600 秒，避免慢模型在內部重試完成前被呼叫端中止。供本機 HTTP 評估使用的 `XIAOAN_ENABLE_DEBUG=true` 與 `XIAOAN_COOKIE_SECURE=false` 也應保留。模型可用 `LATEST_MODEL`、`SECOND_MODEL` 環境變數覆寫；需要第三種 subject 設定時，使用 `--subjects` 傳入 `ModelSpec` JSON 陣列，judge 可用 `--judges` 覆寫。不要把真實 key 寫進 Git、測試、XLSX 或 report。
+`XIAOAN_CHATFLOW_BASE_URL`指向endpoint。Adapter透過POST `/v1/conversations`建立session，再POST `/v1/conversations/{id}/responses`，傳debug、router/response model override及reasoning_effort。它比較整體Chatflow配置；不是只換Composer的因果實驗。
 
-Matrix 預設啟用 2 條獨立 subject×case lane、3 個 Judge，且同一 provider 同時最多 1 個請求；可用 `--subject-concurrency`、`--judge-concurrency`、`--max-in-flight` 與 `--per-provider-concurrency` 調整。每條 lane 內的多輪對話仍嚴格依序執行，Chatflow conversation/cookie 狀態按 thread 隔離。每次 subject 或 Judge provider call 完成後都會立即 `fsync` 到輸出目錄旁的私有 `.matrix-audit/<run>/matrix-checkpoint.jsonl`（權限 `0600`）；可用 `--checkpoint` 指定其他私有路徑，中斷後以相同輸出目錄加 `--resume` 續跑。新版 checkpoint 绑定 cases/models/rating rule hash，配置变化时拒绝复用；旧版没有 hash 的 checkpoint 必须额外明确传入 `--allow-legacy-checkpoint`，不能静默信任。若 stateful chatflow case 只完成部分 turn，程式會拒絕從不完整 conversation state 靜默續跑。
+### B. Direct model mode
 
-一般 `--resume` 會重用所有已落盤結果，包括 `UNAVAILABLE`，以維持相同 checkpoint 的可重現性。使用 `--resume --retry-unavailable` 時，成功的 subject answers 仍保持 frozen 並只重試不可用 Judge cells；若 subject lane 內任何 answer 失敗，則從該 case 的 turn 1 重建整條 stateful lane，並重新執行該 lane 的 Judges 與 attribution。Judge evidence 建立失敗的 cell 不會被誤送至 provider。
+將subject transport改為 `company_eval_plugins:multimodel_transport`。此模式直接發prompt到provider，測的是給定上下文的模型回答，不能宣稱覆蓋Chatflow路由、knowledge或session。Judge仍使用judge transport。
 
-Judge 不再接收完整 `chatflow_trace`。runner 以固定 allowlist 產生 `judge-evidence/v1`：保留 route/safety/capsule/state/output-guard 摘要、Composer 實際可見的 capsule/wiki/source 內容與完整 trace SHA-256；排除 router candidate catalog、provider request、系統 prompt、retry、timing、token 與 response ID。任何 `resolved_ground` 找不到對應正文時會停止該答案的 Judge 評分並記為 `UNAVAILABLE`。公開 `results.xlsx` 的 `All_Answers` 每個答案只保存一次且不含完整 trace，`All_Judgements` 以 `answer_id` 關聯；完整 trace 只保留在私有 checkpoint。兩張明細表與 report 都保留 queue、error class、cache hit/write token（provider 有回傳時）。
+外部model/endpoint availability、權限與計費須以執行環境為準。README中的command只代表已存在的CLI/插件接口，不表示已完成本次live run。
 
-Judge prompt 固定把評分規則與 schema 放在前綴，case、history、answer 與 evidence 放在後綴。`XIAOAN_PROMPT_CACHE_MODE=prefix_only`（預設）只利用供應商自動快取；確認 relay 相容後才設 `explicit`，也可用 `XIAOAN_<PROVIDER>_PROMPT_CACHE_MODE` 逐家啟用。`off` 只代表不发送显式 cache control，无法保证上游供应商关闭自动 prefix cache。OpenAI-compatible explicit 模式发送固定 `prompt_cache_key`，Anthropic-compatible explicit 模式在 system block 发送 `cache_control`；是否生效以 GlobalAI 实际返回的 cached/write token 为准。快取不降低 TPM 佔用，首次 cache write 可能比普通 input 更貴，因此必須用 workbook 的 cached/write tokens 驗證。
+## 5. 併發與checkpoint
 
-調參時先用同一組 2 cases 跑 serial baseline（四個 concurrency 都設 1）與預設配置，比較 wall time、PASS/UNAVAILABLE 分布、輸出列數、答案/評分摘要及 cache tokens。只有結果等價、429/5xx 沒有上升且 p95 queue/latency 可接受時才逐步增加 `--max-in-flight`。通常最先遇到的卡點是 Chatflow worker 數、單 provider RPM/TPM、relay 連線穩定性與 Judge 長尾，而不是本機 CPU。
+CLI預設subject2、Judge3、全局in-flight3、每provider1。呼叫量約subjects×turns加subjects×judges×有效turns，另計retries／attribution。時間與費用不能只看最後成功一次；保留attempt count、retry error、tokens及cache telemetry，缺值不補0。
 
-兩次 run 完成後可執行 `python tools/compare_matrix_runs.py runs/serial/results.xlsx runs/parallel/results.xlsx --serial-seconds <秒> --parallel-seconds <秒>`；只有答案與評分等價且 rate-limit failure 沒有增加才回傳成功，JSON 同時列出 speedup、queue p95、cache tokens 與總 attempts。
+```bash
+# 在原有相同cases/models/rule/transport/output參數上加入
+xiaoan-eval matrix test-cases \
+  --subject-transport company_eval_plugins:xiaoan_chatflow_transport \
+  --judge-transport company_eval_plugins:multimodel_transport \
+  --subjects private/subjects.json --judges private/judges.json \
+  --resume --retry-unavailable --output runs/team-matrix
+```
 
-目前 `evaluation_multimodels/.env` 啟用的十個 subject model 為：Claude `claude-opus-5` / `claude-sonnet-5`、GPT `gpt-5.6-sol` / `o4-mini-2025-04-16`、Gemini `gemini-3-pro-preview-thinking` / `gemini-3.8-flash`、Qwen `qwen3.8-max` / `qwen3.7-max`、Kimi `kimi-k3` / `kimi-k2.6`。每家的第一個模型使用 medium effort，第二個模型使用 high effort。這些 ID 必須存在於目前 GlobalAI 帳戶；若 provider 回傳模型不存在，該 observation 會保留為 `UNAVAILABLE`，不納入品質平均分。
+checkpoint默認在相鄰私有`.matrix-audit`，可用 `--checkpoint`另指定。只重用契約相容結果；v2 hash納入scoring version。`--allow-legacy-checkpoint`不是公式升級方法，不能用來混合舊分數。
+
+## 6. 計分與自評
+
+逐維度整數0–3；focus乘1.5後對全部七維度歸一化。每輪加權，完整case平均；紅線優先，case任何一輪紅線命中則case0。必要輪次/provider/Judge缺失→UNAVAILABLE/null。Cell先按完整case聚合，再case-macro mean；長案例不額外增權。
+
+維度表使用有效turn median，與cell的weighted case mean是不同統計。合成 `[0,0,3]` 同案的總分=1、維度median=0；Markdown／Excel相同。
+
+同provider/model自評預設排除主要分母，仍列出供診斷。`--no-isolate-self-judging`才明確納入；agreement仍用non-self。自評隔離不保證節省呼叫。不同subject排除自己的Judge後panel可能不同，不能直接視為公平能力排行榜。
+
+Matrix的PASS是cell執行／解析成功，不等於ordinary quality threshold PASS；正式品質閾值與oracle批准要按各流程契約解讀。
+
+## 7. 描述統計與校準
+
+| 指標 | 定義／解讀 |
+| --- | --- |
+| median / MAD / IQR / range / n | 逐維度分布、離散程度和樣本數 |
+| ordinal alpha | 同unit的序位評分一致；De=0或不足→UNAVAILABLE |
+| nominal alpha | 紅線二元一致；常數標籤不是完美校準 |
+| Kendall W | 同case/turn內subjects排名一致；不插補缺rank，panel不完整或退化→UNAVAILABLE |
+| Spearman rho | 兩Judge共同units的pooled排序相關，可能混入case難度 |
+
+全部為DESCRIPTIVE_ONLY，不能證明Judge正確。5×5去自評對角線通常已不是完整共同panel，所以W不可用可以是誠實結果。正式比較需共同獨立panel、凍結人類benchmark、red-line sensitivity、維度／claim誤差與漂移追蹤。
+
+Pairwise helper存在，但完整CLI／正式版本勝率與上下文契約尚未完成；不要把LEFT/RIGHT勝率直接當A/B版本勝率。
+
+## 8. Matrix workbook與report
+
+| Sheet | 首要用途 |
+| --- | --- |
+| Matrix | subject×Judge完整case加權macro mean |
+| All_Answers | 同一answer原文、identity、trace hash、provider與timing/token/cache/errors |
+| All_Judgements | Judge回應、維度、紅線、primary eligibility、錯誤 |
+| Dimension_By_Judge | 維度median；總分欄沿用case-macro；count欄是turn數 |
+| Oracle_Coverage | authored vs reviewed，零reviewed不宣稱已測量 |
+| Self_Judging_Isolated | 自評觀察獨立列示；是否納入仍看primary_eligible |
+| Measurement_Contract | 分母、memory／attribution狀態與摘要 |
+| Judge_Agreement／Red_Line_Agreement | 一致性、有效樣本與缺失／退化資訊 |
+| Dimension_Statistics | raw score分布、median/MAD/IQR/range/n |
+
+Matrix正式pair仍是results.xlsx/report.md，但**不是ordinary schema2.1 workbook**，不能直接交ordinary human-review或baseline reader。跨matrix診斷工具 `tools/compare_matrix_runs.py` 的結果也不能自動當作已批准因果／release結論。
+
+## 9. Memory與歸因
+
+Memory observer支援remember/retrieve/use/not_use/update/isolation/stale/unsafe；缺telemetry SKIP，正確不用可PASS。Matrix summary提供lifecycle、fact retrieval P/R及污染。Genericflags是較弱證據，跨session isolation仍需harness。
+
+`--attribution-judge-plugin module:callable`是可選，需符合獨立attribution契約與effective_context_snapshot。保留answer/evidence spans、refs與各層；ENTAILS1、PARTIAL0.5、其他0。路由選中、內容注入、語義支持和因果依賴是四層不同證據。
+
+## 10. 驗證與限制
+
+v2本機完整測試292 passed；發布前亦在standalone clone驗證。測試是軟體回歸，不是292次live評測。缺少approved response/task oracle、部分memory遙測、真正工具outcome與公平共同Judge panel時，報告必須顯示限制。完整版本、校準、診斷及下一步見Shared Guide。

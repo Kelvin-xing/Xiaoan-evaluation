@@ -85,3 +85,24 @@ def test_workbook_baseline_rejects_measurement_drift(tmp_path):
 
     with pytest.raises(ValueError, match="rating_rule_hash"):
         compare_workbook_baseline(path, candidate)
+
+
+def test_missing_quality_is_unavailable_in_baseline_without_zero_or_crash(tmp_path):
+    original = build_report_model([_workbook_record(2.0)], manifest=_manifest())
+    path = tmp_path / 'baseline.xlsx'
+    write_workbook(original, path)
+    failed = build_report_model([_workbook_record(None, 'ERROR')], manifest=_manifest())
+    diff, rows = compare_workbook_baseline(path, failed)
+    assert not diff.comparable
+    assert diff.global_delta.weighted_total_delta is None
+    assert rows[0]['delta'] is None
+    assert rows[0]['status'] == 'UNAVAILABLE'
+
+
+def test_baseline_rejects_changed_scoring_contract(tmp_path):
+    original = build_report_model([_workbook_record()], manifest={**_manifest(), 'scoring_contract_version':'response-effectiveness/v1'})
+    path = tmp_path / 'baseline.xlsx'
+    write_workbook(original, path)
+    candidate = build_report_model([_workbook_record()], manifest={**_manifest(), 'scoring_contract_version':'response-effectiveness/v2'})
+    with pytest.raises(ValueError, match='scoring_contract_version'):
+        compare_workbook_baseline(path, candidate)

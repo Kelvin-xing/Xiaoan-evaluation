@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import json
 from statistics import mean
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
@@ -12,9 +13,10 @@ from uuid import uuid4
 from .artifacts import CaseArtifact, build_artifacts
 from .rag_analysis import summarize_rag
 from .v3_metrics import summarize_v3
+from .coverage import coverage_rows
 
 
-SCHEMA_VERSION = "2.0"
+SCHEMA_VERSION = "2.1"
 TEXT_CHUNK_SIZE = 30000
 OPTIONAL_STATES = {"NOT_RUN", "NOT_REQUIRED", "UNAVAILABLE"}
 
@@ -159,12 +161,14 @@ def build_report_model(
     metric_rows.extend(_aggregate_metric_rows(records))
 
     normalized_manifest = dict(manifest or {})
+    normalized_manifest["oracle_coverage"] = [case.pipeline.get("coverage", {}) for case in artifacts.cases]
     if typed_facts:
         normalized_manifest["typed_facts"] = {
             str(kind): [dict(fact) for fact in facts]
             for kind, facts in sorted(typed_facts.items())
         }
     overview = _overview_rows(artifacts.cases, metric_rows, artifact_state, baseline, experiments, stability)
+    overview.extend(coverage_rows([case.pipeline.get("coverage", {}) for case in artifacts.cases]))
     if typed_facts:
         overview.extend(
             {
@@ -213,13 +217,15 @@ def build_model_from_rows(
 ) -> ReportModel:
     """Rebuild a trusted lifecycle generation from validated workbook rows."""
     case_rows = tuple(dict(row) for row in cases)
+    for row in case_rows:
+        row["quality_verdict"] = _quality_verdict(row)
     metric_rows = tuple(dict(row) for row in metrics)
     return ReportModel(
         schema_version=SCHEMA_VERSION,
         generation_id=generation_id or str(uuid4()),
         artifact_state=artifact_state,
         manifest=dict(manifest),
-        overview=tuple(_overview_from_rows(case_rows, metric_rows, artifact_state, baseline, experiments, stability)),
+        overview=tuple(_overview_from_rows(case_rows, metric_rows, artifact_state, baseline, experiments, stability)) + tuple(coverage_rows(manifest.get("oracle_coverage", []))),
         cases=case_rows,
         turns=tuple(dict(row) for row in turns),
         metrics=metric_rows,
@@ -242,10 +248,45 @@ def _artifact_state(cases: Sequence[CaseArtifact]) -> str:
     return "FINAL"
 
 
+def _eligible_quality(case: CaseArtifact) -> float | None:
+    if case.quality.get("status") == "UNAVAILABLE" or case.status.upper() in {"ERROR", "UNAVAILABLE"}:
+        return None
+    return _number(case.quality.get("weighted_total"))
+
+
+def _quality_verdict(row: Mapping[str, Any]) -> str:
+    if row.get("hard_gate_passed") is False:
+        return "FAIL"
+    value = _number(row.get("final_score"))
+    if value is None or row.get("quality_status") == "UNAVAILABLE" or row.get("status") in {"ERROR", "UNAVAILABLE"}:
+        return "UNAVAILABLE"
+    if row.get("oracle_approved") is False:
+        return "NOT_APPROVED"
+    threshold = _number(row.get("quality_threshold"))
+    if threshold is None:
+        return "NOT_CONFIGURED"
+    return "PASS" if value >= threshold else "FAIL"
+
+
+def _evaluation_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
+    verdicts = [_quality_verdict(row) for row in rows]
+    if "FAIL" in verdicts:
+        return "FAIL"
+    if not rows or "UNAVAILABLE" in verdicts:
+        return "UNAVAILABLE"
+    if any(str(row.get("status", "")).upper() in {"NEEDS_REVIEW", "NEEDS_ADJUDICATION"} for row in rows):
+        return "NEEDS_REVIEW"
+    if "NOT_CONFIGURED" in verdicts:
+        return "NOT_CONFIGURED"
+    if "NOT_APPROVED" in verdicts:
+        return "NOT_APPROVED"
+    return "PASS" if all(row.get("execution_status", row.get("status")) == "PASS" for row in rows) else "FAIL"
+
+
 def _case_row(case: CaseArtifact, artifact_state: str) -> Mapping[str, Any]:
     human = _mapping(case.review.get("human_review"))
     adjudication = _mapping(case.review.get("adjudication"))
-    automatic = _number(case.quality.get("weighted_total"))
+    automatic = _eligible_quality(case)
     human_score = _number(human.get("weighted_total"))
     final_score = human_score if human_score is not None else automatic
     if artifact_state == "NEEDS_ADJUDICATION":
@@ -256,7 +297,13 @@ def _case_row(case: CaseArtifact, artifact_state: str) -> Mapping[str, Any]:
         "case_id": case.case_id,
         "comparison_key": canonical_digest({"case_id": case.case_id, "conversation": case.conversation}),
         "status": case.status,
+        "execution_status": case.pipeline.get("execution_status", case.status),
         "artifact_state": artifact_state,
+        "quality_status": case.quality.get("status", "AVAILABLE" if automatic is not None else "UNAVAILABLE"),
+        "quality_verdict": case.quality.get("verdict", "NOT_CONFIGURED"),
+        "quality_threshold": case.quality.get("threshold"),
+        "oracle_approved": case.quality.get("oracle_approved"),
+        "quality_weights": json.dumps(dict(case.quality.get("final_weights", {})), ensure_ascii=False, sort_keys=True),
         "automatic_score": automatic,
         "human_score": human_score,
         "final_score": final_score,
@@ -291,8 +338,17 @@ def _case_details(case: CaseArtifact):
         text_rows.extend(_text_chunks(user_id, case.case_id, turn, "user_input", str(transcript.get("user_input", ""))))
         text_rows.extend(_text_chunks(assistant_id, case.case_id, turn, "assistant_response", str(transcript.get("assistant_response", ""))))
         primary = _mapping(audit.get("primary"))
-        dimension_values = [_number(item.get("score")) for item in _sequence(primary.get("dimensions")) if isinstance(item, Mapping)]
-        auto_turn_score = mean([item for item in dimension_values if item is not None]) if any(item is not None for item in dimension_values) else None
+        dimension_values = {str(item.get("module")): _number(item.get("score"))
+            for item in _sequence(primary.get("dimensions")) if isinstance(item, Mapping)}
+        weights = _mapping(case.quality.get("final_weights"))
+        auto_turn_score = (
+            sum(dimension_values[name] * weight for name, weight in weights.items())
+            if weights and _eligible_quality(case) is not None
+            and all(dimension_values.get(name) is not None for name in weights) else None
+        )
+        if auto_turn_score is not None and any(item.get("triggered") is True
+            for item in _sequence(primary.get("red_lines")) if isinstance(item, Mapping)):
+            auto_turn_score = 0.0
         route = _mapping(trace.get("route"))
         ground = _mapping(trace.get("ground"))
         safety = _mapping(trace.get("safety"))
@@ -367,16 +423,16 @@ def _text_chunks(text_id: str, case_id: str, turn: int, role: str, text: str):
 
 
 def _overview_rows(cases, metric_rows, state, baseline, experiments, stability):
-    scores = [_number(case.quality.get("weighted_total")) for case in cases]
+    scores = [_eligible_quality(case) for case in cases]
     scores = [score for score in scores if score is not None]
     latencies = [_number(case.performance.get("total_ms") or case.performance.get("latency_ms")) for case in cases]
     latencies = [item for item in latencies if item is not None]
-    statuses = [case.status.upper() for case in cases]
+    statuses = [str(case.pipeline.get("execution_status", case.status)).upper() for case in cases]
     rows = [
         {"section": "Result", "metric": "Artifact state", "value": state, "status": state, "interpretation": "Lifecycle state of this workbook."},
-        {"section": "Result", "metric": "Evaluation verdict", "value": "PASS" if statuses and all(item == "PASS" for item in statuses) else "FAIL", "status": "AVAILABLE", "interpretation": "Quality verdict; speed is reported separately."},
+        {"section": "Result", "metric": "Evaluation verdict", "value": _evaluation_verdict([_case_row(case, state) for case in cases]), "status": "AVAILABLE", "interpretation": "Quality verdict requires a configured threshold and complete eligible evidence."},
         {"section": "Quality", "metric": "Overall score", "value": mean(scores) if scores else None, "status": "AVAILABLE" if scores else "UNAVAILABLE", "interpretation": "Mean case weighted score on the rating-rule scale."},
-        {"section": "Quality", "metric": "Pass rate", "value": statuses.count("PASS") / len(statuses) if statuses else None, "status": "AVAILABLE" if statuses else "UNAVAILABLE", "interpretation": "Share of cases with PASS status."},
+        {"section": "Coverage", "metric": "Execution gate pass rate", "value": statuses.count("PASS") / len(statuses) if statuses else None, "status": "AVAILABLE" if statuses else "UNAVAILABLE", "interpretation": "Execution/gate status only; not a quality acceptance rate."},
         {"section": "Coverage", "metric": "Cases", "value": len(cases), "status": "AVAILABLE", "interpretation": "Number of subject cases."},
         {"section": "Coverage", "metric": "Metric rows", "value": len(metric_rows), "status": "AVAILABLE", "interpretation": "Number of turn-level metric facts."},
         {"section": "Performance", "metric": "Mean total latency (ms)", "value": mean(latencies) if latencies else None, "status": "AVAILABLE" if latencies else "UNAVAILABLE", "interpretation": "Mean over cases with telemetry; missing values are excluded."},
@@ -389,6 +445,7 @@ def _overview_rows(cases, metric_rows, state, baseline, experiments, stability):
         if str(row.get("metric_id", "")).startswith("judge:") and _number(row.get("raw_score")) is not None:
             dimensions.setdefault(str(row["dimension"]), []).append(float(row["raw_score"]))
     rows.extend({"section": "Dimension", "metric": name, "value": mean(values), "status": "AVAILABLE", "interpretation": "Mean automatic judge score across evaluated turns."} for name, values in sorted(dimensions.items()))
+    rows.append({"section": "Coverage", "metric": "Quality eligible cases", "value": len(scores), "status": "AVAILABLE", "interpretation": f"{len(scores)} / {len(cases)} cases; missing quality excluded from score denominators."})
     rows.extend(_decision_overview_rows(cases, metric_rows))
     return rows
 
@@ -428,16 +485,16 @@ def _scalar_leaves(value: Any, prefix: str = ""):
 
 
 def _overview_from_rows(cases, metrics, state, baseline, experiments, stability):
-    scores = [_number(row.get("final_score")) for row in cases]
+    scores = [_number(row.get("final_score")) for row in cases if row.get("quality_status") != "UNAVAILABLE" and str(row.get("status", "")).upper() not in {"ERROR", "UNAVAILABLE"}]
     scores = [value for value in scores if value is not None]
-    statuses = [str(row.get("status", "UNKNOWN")).upper() for row in cases]
+    statuses = [str(row.get("execution_status", row.get("status", "UNKNOWN"))).upper() for row in cases]
     latencies = [_number(row.get("total_ms")) for row in cases]
     latencies = [value for value in latencies if value is not None]
     rows = [
         {"section": "Result", "metric": "Artifact state", "value": state, "status": state, "interpretation": "Lifecycle state of this workbook."},
-        {"section": "Result", "metric": "Evaluation verdict", "value": "PASS" if statuses and all(value == "PASS" for value in statuses) else "FAIL", "status": "AVAILABLE", "interpretation": "Quality verdict; speed is reported separately."},
+        {"section": "Result", "metric": "Evaluation verdict", "value": _evaluation_verdict(cases), "status": "AVAILABLE", "interpretation": "Quality verdict requires a configured threshold and complete eligible evidence."},
         {"section": "Quality", "metric": "Overall score", "value": mean(scores) if scores else None, "status": "AVAILABLE" if scores else "UNAVAILABLE", "interpretation": "Mean available final case score."},
-        {"section": "Quality", "metric": "Pass rate", "value": statuses.count("PASS") / len(statuses) if statuses else None, "status": "AVAILABLE" if statuses else "UNAVAILABLE", "interpretation": "Share of cases with PASS status."},
+        {"section": "Coverage", "metric": "Execution gate pass rate", "value": statuses.count("PASS") / len(statuses) if statuses else None, "status": "AVAILABLE" if statuses else "UNAVAILABLE", "interpretation": "Execution/gate status only; not a quality acceptance rate."},
         {"section": "Coverage", "metric": "Cases", "value": len(cases), "status": "AVAILABLE", "interpretation": "Number of subject cases."},
         {"section": "Coverage", "metric": "Metric rows", "value": len(metrics), "status": "AVAILABLE", "interpretation": "Number of metric facts including score-source rows."},
         {"section": "Performance", "metric": "Mean total latency (ms)", "value": mean(latencies) if latencies else None, "status": "AVAILABLE" if latencies else "UNAVAILABLE", "interpretation": "Mean over cases with telemetry."},
@@ -452,6 +509,7 @@ def _overview_from_rows(cases, metrics, state, baseline, experiments, stability)
         if metric_id.startswith("judge:") and ":red_line:" not in metric_id and value is not None and row.get("score_source") in {"automatic", "human", "adjudicated"}:
             dimensions.setdefault(str(row.get("dimension", "unknown")), []).append(value)
     rows.extend({"section": "Dimension", "metric": key, "value": mean(values), "status": "AVAILABLE", "interpretation": "Mean recorded judge score."} for key, values in sorted(dimensions.items()))
+    rows.append({"section": "Coverage", "metric": "Quality eligible cases", "value": len(scores), "status": "AVAILABLE", "interpretation": f"{len(scores)} / {len(cases)} cases; missing quality excluded from score denominators."})
     rows.extend(_decision_overview_rows(cases, metrics))
     return rows
 

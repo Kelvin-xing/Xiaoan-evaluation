@@ -191,7 +191,7 @@ def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         )
         route_actual = actual.get("route_id")
         accepted_routes = expected.get("route_ids")
-        if _sequence(accepted_routes) and isinstance(route_actual, str):
+        if _sequence(accepted_routes) and accepted_routes and isinstance(route_actual, str):
             route_accepted.append(route_actual in {str(item) for item in accepted_routes})
         if route_expected is not None and isinstance(route_actual, str):
             route_pairs.append((route_expected, route_actual))
@@ -200,7 +200,7 @@ def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         safety_expected = _canonical_label(None, expected.get("safety_levels"))
         safety_actual = actual.get("safety_level")
         accepted_safety = expected.get("safety_levels")
-        if _sequence(accepted_safety) and isinstance(safety_actual, str):
+        if _sequence(accepted_safety) and accepted_safety and isinstance(safety_actual, str):
             safety_accepted.append(safety_actual in {str(item) for item in accepted_safety})
         if safety_expected is not None and isinstance(safety_actual, str):
             safety_pairs.append((safety_expected, safety_actual))
@@ -256,7 +256,7 @@ def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "f1": claim_totals.f1,
             "faithfulness": claim_totals.faithfulness,
             "unsupported_claim_rate": (
-                claim_totals.fp / claim_totals.total_claims
+                (claim_totals.total_claims - claim_totals.supported_claims) / claim_totals.total_claims
                 if claim_totals.total_claims else None
             ),
         },

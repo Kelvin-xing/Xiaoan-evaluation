@@ -25,7 +25,7 @@ SHEETS = (
 
 HEADERS: Mapping[str, tuple[str, ...]] = {
     "00_Overview": ("section", "metric", "value", "status", "interpretation"),
-    "01_Cases": ("component_run_id", "case_id", "comparison_key", "status", "artifact_state", "automatic_score", "human_score", "final_score", "final_source", "hard_gate_passed", "review_status", "adjudication_status", "failure_stage", "cohorts", "total_ms", "evidence_refs"),
+    "01_Cases": ("component_run_id", "case_id", "comparison_key", "status", "artifact_state", "automatic_score", "human_score", "final_score", "final_source", "quality_status", "quality_verdict", "quality_threshold", "quality_weights", "execution_status", "oracle_approved", "hard_gate_passed", "review_status", "adjudication_status", "failure_stage", "cohorts", "total_ms", "evidence_refs"),
     "02_Turns": ("row_kind", "component_run_id", "case_id", "turn", "comparison_key", "status", "user_text_id", "assistant_text_id", "route_id", "safety_level", "ground_refs", "response_sha256", "total_ms", "ttft_ms", "review_status", "automatic_score", "human_score", "final_score", "final_source", "text_id", "role", "chunk_index", "chunk_count", "text_sha256", "content"),
     "03_Metrics": ("row_key", "comparison_key", "component_run_id", "case_id", "turn", "metric_id", "dimension", "raw_score", "normalized_score", "weight", "contribution", "status", "reason", "evidence_refs", "score_source", "baseline_value", "delta"),
     "04_Baseline": ("domain", "grain", "key", "metric", "baseline_value", "candidate_value", "delta", "status", "reason"),
@@ -54,6 +54,7 @@ HEADER_LABELS: Mapping[str, str] = {
     "interpretation": "解讀", "component_run_id": "元件執行 ID", "case_id": "案例 ID",
     "comparison_key": "比較鍵", "artifact_state": "交付物狀態", "automatic_score": "自動評分",
     "human_score": "人工評分", "final_score": "最終評分", "final_source": "最終評分來源",
+    "oracle_approved": "Oracle已審閱", "quality_weights": "最終維度權重", "execution_status": "執行及門檻狀態", "quality_status": "品質可評狀態", "quality_verdict": "品質結論", "quality_threshold": "品質門檻",
     "hard_gate_passed": "硬性門檻是否通過", "review_status": "複核狀態",
     "adjudication_status": "裁決狀態", "failure_stage": "失敗階段", "cohorts": "群組",
     "total_ms": "總耗時（毫秒）", "evidence_refs": "證據引用", "turn": "輪次",
@@ -187,7 +188,7 @@ def read_workbook(path: Path) -> WorkbookFacts:
                 raise ValueError(f"formulas are not allowed in imported workbooks: {sheet.title}")
     metadata_rows = _read_rows(workbook["08_Metadata"], HEADERS["08_Metadata"])
     metadata = {str(row["key"]): _decode_metadata(row) for row in metadata_rows}
-    if metadata.get("schema_version") != SCHEMA_VERSION:
+    if metadata.get("schema_version") not in {"2.0", SCHEMA_VERSION}:
         raise ValueError(f"unsupported workbook schema: {metadata.get('schema_version')!r}")
     manifest = metadata.get("manifest", {})
     if not isinstance(manifest, Mapping):
@@ -200,7 +201,7 @@ def read_workbook(path: Path) -> WorkbookFacts:
         core_digest=str(metadata["core_digest"]),
         lifecycle_digest=str(metadata["lifecycle_digest"]),
         manifest=dict(manifest),
-        cases=tuple(_read_rows(workbook["01_Cases"], HEADERS["01_Cases"])),
+        cases=tuple(_read_rows(workbook["01_Cases"], tuple(name for name in HEADERS["01_Cases"] if metadata.get("schema_version") != "2.0" or name not in {"quality_status", "quality_verdict", "quality_threshold", "quality_weights", "execution_status", "oracle_approved"}))),
         turns=turns,
         metrics=tuple(_read_rows(workbook["03_Metrics"], HEADERS["03_Metrics"])),
         baseline=tuple(_read_rows(workbook["04_Baseline"], HEADERS["04_Baseline"])),

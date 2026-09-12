@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import hashlib
+import math
 from typing import Any, Callable, Mapping, Protocol
 
 from .cases import TestCase
 from .attribution_client import AttributionClient
 from .config import EvaluatorConfig
+from .coverage import case_coverage
 from .judge import JudgeResult
 from .judge_client import JudgeClient
 from .metrics import evaluate_hard_gates, evaluate_memory_checkpoint, evaluate_turn_metrics
@@ -17,7 +19,7 @@ from .review import (
 )
 from .rules import MetricResult, MetricStatus, RatingRule
 from .runner import CaseRunResult
-from .scoring import CaseScore, TurnQuality, score_case
+from .scoring import CaseScore, TurnQuality, score_case, calculate_dynamic_weights
 
 
 class EgressRejected(RuntimeError):
@@ -52,6 +54,11 @@ class EvaluationPipeline:
         self._egress_validator = egress_validator
         self._context_provider = authoritative_context_provider
         self._known_route_ids = known_route_ids
+        if quality_threshold is not None and (
+            isinstance(quality_threshold, bool) or not math.isfinite(quality_threshold)
+            or not 0 <= quality_threshold <= 3
+        ):
+            raise ValueError("quality_threshold must be finite and within 0..3")
         self._quality_threshold = quality_threshold
         self._release_review = release_review
         self._attribution = attribution_client
@@ -93,6 +100,7 @@ class EvaluationPipeline:
                 if checkpoint.after_turn == expected_turn.turn:
                     metrics[f"memory_after_turn_{checkpoint.after_turn}"] = (
                         evaluate_memory_checkpoint(checkpoint, actual_turn.trace)
+                        if case.oracle_gate_eligible else MetricResult(MetricStatus.SKIP, None, "memory oracle is not reviewed")
                     )
             metric_rows.append(metrics)
             observation = _turn_observation(
@@ -317,18 +325,38 @@ class EvaluationPipeline:
             for name, metric in row.items()
             if name in {"pii_leakage", "route_validity", "output_guard", "ground_resolution"}
         )
-        if hard_gate_failed or run.status == "error" or not qualities:
+        triggered = tuple(dict.fromkeys(red for turn in qualities for red in turn.triggered_red_lines))
+        quality_available = (
+            not hard_gate_failed and run.status != "error"
+            and len(qualities) == len(case.turns) == len(run.turns)
+            and not any(metric.status is MetricStatus.ERROR for row in metric_rows for metric in row.values())
+        )
+        if not quality_available:
             case_score = CaseScore(
-                case_status="FAIL",
-                red_line_triggered=False,
-                triggered_red_lines=(),
-                dimension_scores={item.name: 0.0 for item in self._rule.modules},
-                final_weights={},
-                weighted_total=0.0,
+                case_status="UNAVAILABLE",
+                red_line_triggered=bool(triggered),
+                triggered_red_lines=triggered,
+                dimension_scores={},
+                final_weights=calculate_dynamic_weights(self._rule, case.quality_focus),
+                weighted_total=None,
             )
         else:
             case_score = score_case(self._rule, tuple(qualities), case.quality_focus)
         status = _case_status(run, metric_rows, case_score.red_line_triggered, review_statuses)
+        execution_status = _case_status(run, metric_rows, False, [])
+        if len(run.turns) != len(case.turns):
+            execution_status = "ERROR"
+        quality_verdict = (
+            "FAIL" if triggered else
+            "UNAVAILABLE" if not quality_available else
+            "NOT_APPROVED" if not case.oracle_gate_eligible else
+            "NOT_CONFIGURED" if self._quality_threshold is None else
+            "PASS" if case_score.weighted_total >= self._quality_threshold else "FAIL"
+        )
+        if status == "PASS" and not quality_available:
+            status = "ERROR"
+        elif status == "PASS" and quality_verdict == "FAIL":
+            status = "FAIL"
         failure_stages = _failure_stages(metric_rows, case_score.red_line_triggered, run.status)
 
         return {
@@ -348,10 +376,15 @@ class EvaluationPipeline:
                 ],
             },
             "safety": {
-                "hard_gate_passed": not case_score.red_line_triggered and not hard_gate_failed,
+                "hard_gate_passed": (
+                    False if triggered or any(metric.status is MetricStatus.FAIL for row in metric_rows for name, metric in row.items() if name in {"pii_leakage", "route_validity", "output_guard", "ground_resolution"})
+                    else None if hard_gate_failed or run.status == "error" else True
+                ),
                 "red_lines": list(case_score.triggered_red_lines),
             },
             "pipeline": {
+                "execution_status": execution_status,
+                "coverage": case_coverage(case),
                 "turns": [
                     {name: _metric_dict(metric) for name, metric in row.items()}
                     for row in metric_rows
@@ -360,6 +393,10 @@ class EvaluationPipeline:
                 "observations": observations,
             },
             "quality": {
+                "oracle_approved": case.oracle_gate_eligible,
+                "status": "AVAILABLE" if quality_available else "UNAVAILABLE",
+                "verdict": quality_verdict,
+                "threshold": self._quality_threshold,
                 "dimensions": dict(case_score.dimension_scores),
                 "final_weights": dict(case_score.final_weights),
                 "weighted_total": case_score.weighted_total,

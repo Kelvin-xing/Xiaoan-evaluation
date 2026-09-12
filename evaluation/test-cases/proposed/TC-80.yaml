@@ -1,0 +1,29 @@
+schema_version: '2.0'
+id: TC-80
+test_objective: 待審閱：memory stale 合成回歸；需fact級telemetry，isolation另需多session harness。
+quality_focus:
+- 基础能力
+maturity: PROVISIONAL_DESCRIPTIVE
+tags:
+  audit_proposal: true
+  memory_type: stale
+turns:
+- turn: 1
+  user: 我偏好詳細說明。
+  expected:
+    response_oracle:
+      reference_answer: 尊重本輪明示的資訊使用限制及最新偏好。
+- turn: 2
+  user: 這個偏好已不適用，請不要沿用。
+  expected:
+    response_oracle:
+      reference_answer: 尊重本輪明示的資訊使用限制及最新偏好。
+memory_checkpoints:
+- after_turn: 2
+  facts:
+  - preferred_format:detailed
+  usage: 檢查 stale，缺telemetry不可判失敗。
+  type: stale
+oracle_provenance:
+  source: 2026-09-13-audit-proposal
+  status: provisional

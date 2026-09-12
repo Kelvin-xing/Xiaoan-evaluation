@@ -76,8 +76,8 @@ def test_diagonal_self_matrix_keeps_kendall_population_and_red_line_denominator(
             })
     quality = agreement_report(rows, "quality")
     assert quality["kendall_strata"][0]["subject_n"] == 3
-    assert quality["kendall_strata"][0]["missing_policy"] == "SELF_EXCLUDED_MIDRANK"
-    assert quality["kendall_strata"][0]["kendall_w"] is not None
+    assert quality["kendall_strata"][0]["missing_policy"] == "NO_IMPUTATION"
+    assert quality["kendall_strata"][0]["kendall_w"] is None
     red_line = red_line_agreement_report(rows, "RL")
     assert red_line["eligible_n"] == 6
     assert red_line["missing_n"] == 3

@@ -96,7 +96,7 @@ def test_agreement_excludes_self_judging_and_unavailable_cells():
     assert report["pairwise_spearman"][0]["spearman_rho"] == pytest.approx(1)
 
 
-def test_kendall_w_diagonal_self_matrix_uses_explicit_midrank_missing_policy():
+def test_kendall_w_diagonal_self_matrix_keeps_missing_ranks_unavailable():
     rows = []
     subjects = ("a", "b", "c")
     for subject_index, subject in enumerate(subjects):
@@ -112,8 +112,8 @@ def test_kendall_w_diagonal_self_matrix_uses_explicit_midrank_missing_policy():
     assert stratum["subject_n"] == 3
     assert stratum["judge_n"] == 3
     assert stratum["missing_n"] == 3
-    assert stratum["missing_policy"] == "SELF_EXCLUDED_MIDRANK"
-    assert stratum["kendall_w"] is not None
+    assert stratum["missing_policy"] == "NO_IMPUTATION"
+    assert stratum["kendall_w"] is None
 
 
 def test_red_line_nominal_agreement_excludes_self_and_reports_denominator():
@@ -125,7 +125,7 @@ def test_red_line_nominal_agreement_excludes_self_and_reports_denominator():
     report = red_line_agreement_report(rows, "RL")
     assert report["eligible_n"] == 2
     assert report["missing_n"] == 1
-    assert report["krippendorff_alpha_nominal"] == pytest.approx(1)
+    assert report["krippendorff_alpha_nominal"] is None
 
 
 def test_self_judging_requires_same_provider_and_model():

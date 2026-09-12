@@ -28,7 +28,7 @@ from .recommendations import (
 from .experiments import enforce_single_variable
 from .rules import load_rating_rule
 from .runner import EvaluationRunner
-from .scoring import TurnDimensionFact, fact_dict, score_case_fact, score_scenario
+from .scoring import SCORING_CONTRACT_VERSION, TurnDimensionFact, fact_dict, score_case_fact, score_scenario
 from .stability import summarize_stability
 from .transport import FastAPITransport
 from .deliverables import (
@@ -182,7 +182,7 @@ def _parser() -> argparse.ArgumentParser:
     matrix.add_argument("--retry-unavailable", action="store_true", help="with --resume, retry failed subject lanes and unavailable Judge cells")
     matrix.add_argument("--checkpoint", help="private checkpoint path (default: sibling .matrix-audit directory)")
     matrix.add_argument("--allow-legacy-checkpoint", action="store_true", help="explicitly trust a pre-contract-hash checkpoint")
-    matrix.add_argument("--isolate-self-judging", action="store_true", help="exclude subject/judge self-evaluations from primary aggregates")
+    matrix.add_argument("--isolate-self-judging", action=argparse.BooleanOptionalAction, default=True, help="exclude subject/judge self-evaluations from primary aggregates")
     matrix.add_argument("--subject-concurrency", type=int, default=2, help="parallel independent subject/case lanes (default: 2)")
     matrix.add_argument("--judge-concurrency", type=int, default=3, help="parallel stateless Judge calls per answer (default: 3)")
     matrix.add_argument("--max-in-flight", type=int, default=3, help="hard cap for all simultaneous provider calls (default: 3)")
@@ -229,7 +229,7 @@ def _matrix(args: argparse.Namespace) -> int:
         judge_concurrency=int(getattr(args, "judge_concurrency", 3)),
         max_in_flight=int(getattr(args, "max_in_flight", 3)),
         per_provider_concurrency=int(getattr(args, "per_provider_concurrency", 1)),
-        isolate_self_judging=bool(getattr(args, "isolate_self_judging", False)),
+        isolate_self_judging=bool(getattr(args, "isolate_self_judging", True)),
         attribution_provider=attribution_provider,
         attribution_judge_version=str(getattr(args, "attribution_judge_version", "attribution-judge/v1")),
     )
@@ -318,7 +318,7 @@ def _run(args: argparse.Namespace) -> int:
     suite = SuiteManifest.from_cases(
         suite_id=args.suite_id, suite_version=args.suite_version,
         taxonomy_version=args.taxonomy_version,
-        scoring_contract_version="response-effectiveness/v1",
+        scoring_contract_version=SCORING_CONTRACT_VERSION,
         cases=[item.case for item in loaded if item.case],
         case_digests={item.case.id: hashlib.sha256(item.source.read_bytes()).hexdigest() for item in loaded if item.case},
         retry_policy=manifest.retry_policy,
@@ -345,7 +345,7 @@ def _run(args: argparse.Namespace) -> int:
         max_workers=args.case_concurrency,
     )
 
-    manifest_payload = {**manifest.to_dict(), "fingerprint": manifest.fingerprint}
+    manifest_payload = {**manifest.to_dict(), "fingerprint": manifest.fingerprint, "scoring_contract_version": SCORING_CONTRACT_VERSION}
     _require_safe(manifest_payload, validator, "manifest")
     recommendations = _build_recommendations(
         records, validator, _load_plugin(args.recommendation_plugin)
@@ -473,19 +473,22 @@ def _suite_typed_facts(suite, records, rule, execution):
         audits = record.get("review", {}).get("judge_audit", ()) if isinstance(record.get("review"), Mapping) else ()
         facts = []
         for turn, audit in enumerate(audits, 1):
+            if record.get("quality", {}).get("status") == "UNAVAILABLE" or record.get("status") in {"ERROR", "UNAVAILABLE"}:
+                continue
             primary = audit.get("primary") if isinstance(audit, Mapping) else None
             dimensions = primary.get("dimensions", ()) if isinstance(primary, Mapping) else ()
             for dimension in dimensions:
                 if isinstance(dimension, Mapping):
                     facts.append(TurnDimensionFact(
-                        binding.case_id, turn, str(dimension.get("module")), "AVAILABLE", float(dimension.get("score"))
+                        binding.case_id, turn, str(dimension.get("module")), "AVAILABLE",
+                        0.0 if record.get("safety", {}).get("red_lines") else float(dimension.get("score"))
                     ))
         turn_facts.extend(fact_dict(fact) for fact in facts)
         focus = binding.quality_focus or tuple(module.name for module in rule.modules)
         case_facts[binding.case_id] = score_case_fact(
             case_id=binding.case_id, expected_turns=binding.expected_turns,
             quality_focus=focus, dimension_weights={module.name: module.weight for module in rule.modules},
-            turn_facts=facts,
+            turn_facts=facts, dynamic_weight_multiplier=rule.dynamic_weight_multiplier,
         )
     scenario_facts = []
     groups = sorted({(item.scenario_id, item.comparability_group) for item in suite.cases})
@@ -540,7 +543,7 @@ def _experiment(args: argparse.Namespace) -> int:
         changes.append(change)
         diff = compare_baseline(baseline_records, variant_records)
         if not diff.comparable:
-            raise ValueError("variant case set differs from baseline")
+            raise ValueError("variant case set differs from baseline or quality is unavailable")
         diffs.append(diff)
         critical_regressions += _critical_regressions(
             baseline_records, variant_records

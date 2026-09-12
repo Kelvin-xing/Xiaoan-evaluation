@@ -292,6 +292,7 @@ def _apply_submissions(facts: WorkbookFacts, submissions, rule: RatingRule):
     metrics = [dict(row) for row in facts.metrics]
     review_rows = [dict(row) for row in facts.human_review]
     disagreement_keys = set()
+    affected_cases = {item["case_id"] for item in submissions}
     for submission in submissions:
         case_id, turn = submission["case_id"], submission["turn"]
         auto_red_lines = {
@@ -302,7 +303,7 @@ def _apply_submissions(facts: WorkbookFacts, submissions, rule: RatingRule):
         if auto_red_lines != human_red_lines:
             disagreement_keys.add((case_id, turn))
         turn_row = next(row for row in turns if row.get("case_id") == case_id and int(row.get("turn")) == turn)
-        weights = {module.name: module.weight for module in rule.modules}
+        weights = _case_weights(next(row for row in cases if row["case_id"] == case_id), rule)
         human_score = sum(item["score"] * weights[item["module"]] for item in submission["dimensions"])
         turn_row.update({"human_score": human_score, "final_score": None if (case_id, turn) in disagreement_keys else human_score, "final_source": "human", "review_status": "NEEDS_ADJUDICATION" if (case_id, turn) in disagreement_keys else "COMPLETED"})
         for item in submission["dimensions"]:
@@ -327,16 +328,21 @@ def _apply_submissions(facts: WorkbookFacts, submissions, rule: RatingRule):
         review_row = next(row for row in review_rows if row.get("case_id") == case_id and int(row.get("turn")) == turn)
         review_row.update({"review_id": submission["review_id"], "status": "NEEDS_ADJUDICATION" if (case_id, turn) in disagreement_keys else "COMPLETED", "reviewer_id": submission["reviewer_id"], "submitted_at": submission["submitted_at"], "confidence": submission["confidence"], "notes": submission["notes"]})
     for case in cases:
+        if case["case_id"] not in affected_cases:
+            continue
         case_turns = [row for row in turns if row.get("case_id") == case["case_id"]]
         if any((case["case_id"], int(row["turn"])) in disagreement_keys for row in case_turns):
             case.update({"artifact_state": "NEEDS_ADJUDICATION", "human_score": None, "final_score": None, "final_source": "unresolved", "review_status": "NEEDS_ADJUDICATION", "status": "NEEDS_ADJUDICATION"})
             continue
         values = [float(row["final_score"]) for row in case_turns if isinstance(row.get("final_score"), (int, float)) and not isinstance(row.get("final_score"), bool)]
         human_value = sum(values) / len(values) if values else None
-        deterministic = [str(row.get("status", "")).upper() for row in metrics if row.get("case_id") == case["case_id"] and row.get("score_source") == "automatic" and not str(row.get("metric_id", "")).startswith("judge:")]
+        deterministic = [str(row.get("status", "")).upper() for row in metrics if row.get("case_id") == case["case_id"] and row.get("score_source") == "automatic" and row.get("metric_id") != "route_preference"
+            and not str(row.get("metric_id", "")).startswith("judge:")]
         status = "ERROR" if "ERROR" in deterministic else "FAIL" if "FAIL" in deterministic else "PASS"
         case.update({"artifact_state": "FINAL", "human_score": human_value, "final_score": human_value, "final_source": "human", "review_status": "COMPLETED", "status": status})
-    state = "NEEDS_ADJUDICATION" if disagreement_keys else "FINAL"
+    state = ("NEEDS_ADJUDICATION" if any(row.get("review_status") == "NEEDS_ADJUDICATION" for row in turns)
+        else "PENDING_REVIEW" if any(row.get("review_status") == "NEEDS_REVIEW" for row in turns) else "FINAL")
+    _refresh_reviewed_cases([case for case in cases if case["case_id"] in affected_cases], turns, metrics)
     return build_model_from_rows(
         manifest=facts.manifest, artifact_state=state, cases=cases, turns=turns, metrics=metrics,
         baseline=facts.baseline, experiments=facts.experiments, human_review=review_rows,
@@ -385,7 +391,7 @@ def adjudicate_workbook(
     if {str(row.get("dimension")) for row in source_dimensions} != {module.name for module in rule.modules}:
         raise ValueError("adjudication source has incomplete dimension facts")
     triggered = any(row.get("raw_score") == 1 for row in source_red_lines)
-    score = 0.0 if triggered else sum(float(row["raw_score"]) * next(module.weight for module in rule.modules if module.name == row["dimension"]) for row in source_dimensions)
+    score = 0.0 if triggered else sum(float(row["raw_score"]) * _case_weights(next(case for case in cases if case["case_id"] == case_id), rule)[row["dimension"]] for row in source_dimensions)
     turn_row.update({"final_score": score, "final_source": "adjudicated", "review_status": "COMPLETED"})
     for row in source_dimensions + source_red_lines:
         copy = dict(row)
@@ -407,6 +413,7 @@ def adjudicate_workbook(
             values = [float(row["final_score"]) for row in case_turns if isinstance(row.get("final_score"), (int, float)) and not isinstance(row.get("final_score"), bool)]
             case.update({"artifact_state": "FINAL", "final_score": sum(values) / len(values) if values else None, "final_source": "adjudicated", "review_status": "COMPLETED", "adjudication_status": "COMPLETED", "status": "FAIL" if triggered else "PASS"})
     state = "NEEDS_ADJUDICATION" if any(row.get("review_status") == "NEEDS_ADJUDICATION" for row in turns) else "FINAL"
+    _refresh_reviewed_cases([case for case in cases if case["case_id"] == case_id], turns, metrics)
     return build_model_from_rows(
         manifest=facts.manifest, artifact_state=state, cases=cases, turns=turns,
         metrics=metrics, baseline=facts.baseline, experiments=facts.experiments,
@@ -436,3 +443,45 @@ def _reconstruct_text(rows: Sequence[Mapping[str, Any]]):
 
 def _results_path(path: Path) -> Path:
     return path / "results.xlsx" if path.is_dir() else path
+
+
+def _case_weights(case, rule):
+    raw = case.get("quality_weights")
+    weights = json.loads(raw) if isinstance(raw, str) and raw else raw
+    if not weights:
+        raise ValueError("workbook lacks dynamic quality weights; regenerate it from the original case/rule before human scoring")
+    if not isinstance(weights, Mapping) or set(weights) != {module.name for module in rule.modules}:
+        raise ValueError("workbook quality weights do not match rating rule")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1 for value in weights.values()) or abs(sum(weights.values()) - 1) > 1e-9:
+        raise ValueError("workbook quality weights must be normalized")
+    return weights
+
+
+def _refresh_reviewed_cases(cases, turns, metrics):
+    """Preserve execution failure and select red lines across the whole episode."""
+    for case in cases:
+        if case.get("review_status") == "NEEDS_ADJUDICATION":
+            continue
+        case_turns = [row for row in turns if row.get("case_id") == case["case_id"]]
+        triggered = False
+        for turn in case_turns:
+            source = turn.get("final_source", "automatic")
+            triggered |= any(row.get("raw_score") == 1 for row in metrics
+                if row.get("case_id") == case["case_id"] and row.get("turn") == turn.get("turn")
+                and row.get("score_source") == source and str(row.get("metric_id", "")).startswith("judge:red_line:"))
+        deterministic = [row for row in metrics if row.get("case_id") == case["case_id"]
+            and row.get("score_source") == "automatic" and row.get("metric_id") != "route_preference"
+            and not str(row.get("metric_id", "")).startswith("judge:")]
+        error = case.get("execution_status") == "ERROR" or any(str(row.get("status", "")).upper() == "ERROR" for row in deterministic)
+        failed = any(str(row.get("status", "")).upper() == "FAIL" for row in deterministic)
+        complete = bool(case_turns) and all(isinstance(row.get("final_score"), (int, float)) for row in case_turns)
+        case["hard_gate_passed"] = False if triggered or failed else None if error else True
+        case["execution_status"] = "ERROR" if error else "FAIL" if failed else "PASS"
+        case["quality_status"] = "AVAILABLE" if complete and not error else "UNAVAILABLE"
+        if not complete or error:
+            case["final_score"] = None
+        elif triggered:
+            case["final_score"] = 0.0
+        threshold = case.get("quality_threshold")
+        below = isinstance(threshold, (int, float)) and case.get("final_score") is not None and case["final_score"] < threshold
+        case["status"] = "ERROR" if error else "FAIL" if failed or triggered or below else "PASS"

@@ -40,8 +40,10 @@ def build_matrix_summaries(rows: Sequence[Mapping[str, Any]], *, memory_results:
         "primary_denominator": {
             "eligible_n": sum(row.get("status") == "PASS" and row.get("primary_eligible", True) for row in rows),
             "self_judging_n": sum(bool(row.get("self_judging")) for row in rows),
+            "self_excluded_n": sum(bool(row.get("self_judging")) and not row.get("primary_eligible", True) for row in rows),
             "operationally_unavailable_n": sum(row.get("status") != "PASS" for row in rows),
         },
+        "validity_status": "NOT_CALIBRATED_BY_THIS_RUN",
         "agreement": {dimension: agreement_report(rows, dimension) for dimension in dimensions},
         "dimensions": {dimension: robust_dimension_summary(rows, dimension) for dimension in dimensions},
         "red_line_agreement": {identifier: red_line_agreement_report(rows, identifier) for identifier in red_line_ids},

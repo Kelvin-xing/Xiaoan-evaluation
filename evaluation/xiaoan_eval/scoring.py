@@ -8,7 +8,7 @@ from typing import Iterable, Mapping, Sequence
 from .rules import RatingRule, RatingRuleError
 
 
-SCORING_CONTRACT_VERSION = "response-effectiveness/v1"
+SCORING_CONTRACT_VERSION = "response-effectiveness/v2"
 
 
 @dataclass(frozen=True)
@@ -24,23 +24,26 @@ class CaseScore:
     triggered_red_lines: tuple[str, ...]
     dimension_scores: Mapping[str, float]
     final_weights: Mapping[str, float]
-    weighted_total: float
+    weighted_total: float | None
 
 
 def calculate_dynamic_weights(
     rule: RatingRule, quality_focus: Iterable[str] = ()
 ) -> dict[str, float]:
-    module_names = {module.name for module in rule.modules}
-    focus = set(quality_focus)
-    unknown = focus - module_names
-    if unknown:
-        raise RatingRuleError(f"quality_focus contains unknown modules: {sorted(unknown)!r}")
-    adjusted = {
-        module.name: module.weight
-        * (rule.dynamic_weight_multiplier if module.name in focus else 1.0)
-        for module in rule.modules
-    }
+    return normalized_weights(
+        {module.name: module.weight for module in rule.modules},
+        quality_focus, rule.dynamic_weight_multiplier,
+    )
+
+
+def normalized_weights(base: Mapping[str, float], focus: Iterable[str], multiplier: float = 1.5) -> dict[str, float]:
+    selected = set(focus)
+    if selected - set(base):
+        raise RatingRuleError(f"quality_focus contains unknown modules: {sorted(selected - set(base))!r}")
+    adjusted = {name: weight * (multiplier if name in selected else 1.0) for name, weight in base.items()}
     total = sum(adjusted.values())
+    if total <= 0:
+        raise ValueError("dimension weights must sum to a positive number")
     return {name: weight / total for name, weight in adjusted.items()}
 
 
@@ -106,7 +109,7 @@ class CaseScoreFact:
     dimension_means: Mapping[str, float]
     dimension_weights: Mapping[str, float]
     exclusions: tuple[str, ...]
-    formula: str = "mean dimension across expected turns, then weighted dimension mean"
+    formula: str = "mean all dimensions across expected turns, then dynamic-focus weighted mean"
     scoring_contract_version: str = SCORING_CONTRACT_VERSION
 
 
@@ -133,12 +136,15 @@ def score_case_fact(
     quality_focus: Sequence[str],
     dimension_weights: Mapping[str, float],
     turn_facts: Sequence[TurnDimensionFact],
+    dynamic_weight_multiplier: float = 1.5,
 ) -> CaseScoreFact:
     expected = tuple(expected_turns)
+    if not expected or len(set(expected)) != len(expected):
+        raise ValueError("expected_turns must be non-empty and unique")
     focus = tuple(quality_focus)
     exclusions: list[str] = []
     means: dict[str, float] = {}
-    for dimension in focus:
+    for dimension in dimension_weights:
         values: list[float] = []
         for turn in expected:
             matches = [
@@ -155,7 +161,7 @@ def score_case_fact(
             values.append(matches[0].value)
         if len(values) == len(expected):
             means[dimension] = sum(values) / len(values)
-    if exclusions or set(means) != set(focus):
+    if exclusions or set(means) != set(dimension_weights):
         return CaseScoreFact(
             case_id=case_id,
             status="UNAVAILABLE",
@@ -165,12 +171,8 @@ def score_case_fact(
             dimension_weights={},
             exclusions=tuple(exclusions),
         )
-    raw_weights = {dimension: float(dimension_weights[dimension]) for dimension in focus}
-    total = sum(raw_weights.values())
-    if total <= 0:
-        raise ValueError("quality_focus weights must sum to a positive number")
-    weights = {key: value / total for key, value in raw_weights.items()}
-    value = sum(means[key] * weights[key] for key in focus)
+    weights = normalized_weights(dimension_weights, focus, dynamic_weight_multiplier)
+    value = sum(means[key] * weights[key] for key in dimension_weights)
     return CaseScoreFact(
         case_id=case_id,
         status="AVAILABLE",

@@ -344,7 +344,7 @@ def test_matrix_marks_self_judging_outside_primary_denominator() -> None:
     assert "SELF_ISOLATED" in render_matrix_report(rows)
 
 
-def test_matrix_includes_self_judging_in_default_matrix_and_denominator() -> None:
+def test_matrix_excludes_self_judging_from_default_primary_denominator() -> None:
     rule = load_rating_rule("ratings rule.yml")
     rows = run_matrix(
         ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
@@ -355,8 +355,8 @@ def test_matrix_includes_self_judging_in_default_matrix_and_denominator() -> Non
         rating_rule=rule,
     )
     assert rows[0]["self_judging"] is True
-    assert rows[0]["primary_eligible"] is True
-    assert "2.0000" in render_matrix_report(rows)
+    assert rows[0]["primary_eligible"] is False
+    assert "SELF_ISOLATED" in render_matrix_report(rows)
 
 
 def test_workbook_main_matrix_isolates_self_score_in_separate_sheet(tmp_path: Path) -> None:
@@ -502,7 +502,7 @@ def test_memory_checkpoint_types_do_not_all_require_memory_used_true() -> None:
         judge_transport=lambda *_args: {"text": _judge_json(rule, 2)}, rating_rule=rule,
     )
     assert [item["status"] for item in rows[0]["memory_metrics"]] == ["pass", "fail"]
-    assert rows[0]["memory_metrics"][1]["contamination_candidates"] == ("tenant-b",)
+    assert rows[0]["memory_metrics"][1]["contamination_candidates"] == ["tenant-b"]
     assert rows[0]["memory_metrics"][0]["status"] == "pass"
     assert rows[0]["memory_metrics"][0]["not_used_when_forbidden"] is True
     assert rows[0]["memory_metrics"][1]["status"] == "fail"

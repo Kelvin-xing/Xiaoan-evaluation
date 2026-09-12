@@ -67,7 +67,8 @@ def render_decision_report(model: ReportModel) -> str:
         "## 執行結果", "", f"- 產物狀態：`{_display_status(model.artifact_state)}`",
         f"- 評估結論：`{_display_status(overview.get('Evaluation verdict', 'UNAVAILABLE'))}`",
         f"- 平均案例分（0–3）：`{_display(overview.get('Overall score'))}`",
-        f"- 通過率：`{_display(overview.get('Pass rate'))}`",
+        f"- 執行／門檻通過率：`{_display(overview.get('Execution gate pass rate'))}`",
+        f"- 品質可評案例：`{_display(overview.get('Quality eligible cases'))}`",
         f"- 平均總延遲：`{_display(overview.get('Mean total latency (ms)'))}` 毫秒", "",
         "品質與速度分開呈現；缺失的遙測資料會被排除，不會按零分計算。", "",
         "## 快速判讀：路由、策略與證據", "",
@@ -183,6 +184,11 @@ def render_decision_report(model: ReportModel) -> str:
     else:
         lines.append("未附上類型化的測試套件、歸因、基準、參數、診斷或實驗事實。")
     lines.extend(["", "## 限制", "", "- 路由命中或相似度分數，不能證明回答在語義上實際使用了相關內容。", "- `UNAVAILABLE`、`NOT_RUN` 與 `NOT_APPLICABLE` 不等於數值零。", "- 只有測量方式與案例／輪次契約相容時，基準差異才有效。", ""])
+    coverage = [row for row in model.overview if str(row.get("metric", "")).startswith("Oracle ")]
+    if coverage:
+        lines.extend(["", "## Oracle 覆蓋", "", "| 指標 | 已審閱單元 | 狀態 | 說明 |", "| --- | ---: | --- | --- |"])
+        for row in coverage:
+            lines.append(f"| {_md(row['metric'])} | {_display(row['value'])} | {_display_status(row['status'])} | {_md(row['interpretation'])} |")
     return "\n".join(lines)
 
 

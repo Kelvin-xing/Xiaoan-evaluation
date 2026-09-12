@@ -510,4 +510,4 @@ def test_pipeline_refuses_judge_egress_without_validator_approval() -> None:
 
     assert record["status"] == "FAIL"
     assert record["safety"]["hard_gate_passed"] is False
-    assert record["quality"]["weighted_total"] == 0.0
+    assert record["quality"]["weighted_total"] is None

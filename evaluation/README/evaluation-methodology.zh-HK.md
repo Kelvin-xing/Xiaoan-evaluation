@@ -1,3 +1,5 @@
+> 2026-09-13 更新：本文件保留既有操作／方法背景；目前狀態、分母、聚合及能力邊界以 [project README](README.md) 和 [v2 契約](measurement-contract-v2.zh-HK.md) 為準。特別是 UNAVAILABLE 不計品質0、自評預設隔離、Kendall不插補、schema2.1與有限oracle覆蓋。
+
 # `evaluation/` 方法論與實作狀態
 
 更新：2026-09-08

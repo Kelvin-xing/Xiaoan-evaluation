@@ -24,7 +24,7 @@ def robust_dimension_summary(rows: Sequence[Mapping[str, Any]], dimension: str) 
     values = [
         float(row["scores"][dimension])
         for row in rows
-        if row.get("primary_eligible", True)
+        if row.get("status", "PASS") == "PASS" and row.get("primary_eligible", True)
         and isinstance(row.get("scores"), Mapping)
         and isinstance(row["scores"].get(dimension), (int, float))
         and not isinstance(row["scores"].get(dimension), bool)
@@ -222,7 +222,7 @@ def agreement_report(rows: Sequence[Mapping[str, Any]], dimension: str) -> dict[
         unit = (str(row.get("case_id")), int(row.get("turn", 0)), str(row["subject"]["id"]))
         values[unit][str(row["judge"]["id"])] = float(row["scores"][dimension])
     alpha = _ordinal_alpha(list(values.values()))
-    judges = sorted({judge for cell in values.values() for judge in cell})
+    judges = sorted({str(row["judge"]["id"]) for row in rows})
     # Kendall W ranks subjects only within the same case/turn stratum. Scores
     # from unrelated cases are never treated as one ranking population.
     strata: dict[tuple[str, int], dict[str, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
@@ -241,7 +241,9 @@ def agreement_report(rows: Sequence[Mapping[str, Any]], dimension: str) -> dict[
             "judge_n": len(comparable_judges),
             "judge_ids": comparable_judges,
             "missing_n": imputed_n,
-            "missing_policy": "SELF_EXCLUDED_MIDRANK",
+            "missing_policy": "NO_IMPUTATION",
+            "status": "AVAILABLE" if kendall_value is not None else "UNAVAILABLE",
+            "reason": "INCOMPLETE_PANEL" if imputed_n else "INSUFFICIENT_OR_CONSTANT_RANKS" if kendall_value is None else "",
             "kendall_w": kendall_value,
         })
     available_w = [item["kendall_w"] for item in kendall_strata if item["kendall_w"] is not None]
@@ -258,6 +260,9 @@ def agreement_report(rows: Sequence[Mapping[str, Any]], dimension: str) -> dict[
         "eligible_n": len(eligible),
         "missing_n": attempted - len(eligible),
         "krippendorff_alpha_ordinal": alpha,
+        "alpha_status": "AVAILABLE" if alpha is not None else "UNAVAILABLE",
+        "alpha_reason": "INSUFFICIENT_PAIRS_OR_NO_LABEL_VARIATION" if alpha is None else "",
+        "spearman_scope": "POOLED_CASE_TURN_SUBJECT_UNITS_DESCRIPTIVE",
         "kendall_w": kendall,
         "kendall_strata": kendall_strata,
         "pairwise_spearman": pairwise,
@@ -289,13 +294,16 @@ def red_line_agreement_report(rows: Sequence[Mapping[str, Any]], red_line_id: st
                 "left_judge": left, "right_judge": right, "eligible_n": len(pairs),
                 "exact_agreement": sum(a == b for a, b in pairs) / len(pairs) if pairs else None,
             })
+    alpha = _nominal_alpha(list(values.values()))
     return {
         "interpretation": "DESCRIPTIVE_ONLY",
         "red_line_id": red_line_id,
         "attempted_n": len(rows),
         "eligible_n": eligible_n,
         "missing_n": len(rows) - eligible_n,
-        "krippendorff_alpha_nominal": _nominal_alpha(list(values.values())),
+        "krippendorff_alpha_nominal": alpha,
+        "alpha_status": "AVAILABLE" if alpha is not None else "UNAVAILABLE",
+        "alpha_reason": "" if alpha is not None else "INSUFFICIENT_OVERLAP_OR_ZERO_EXPECTED_DISAGREEMENT",
         "pairwise_exact_agreement": pairwise,
     }
 
@@ -312,7 +320,7 @@ def summarize_memory_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, 
     passed = sum(str(row.get("status", "")).lower() == "pass" for row in available)
     expected: set[str] = set()
     retrieved: set[str] = set()
-    fact_rows = [row for row in available if row.get("check_type", "use") in {"remember", "retrieve", "use"}]
+    fact_rows = [row for row in available if row.get("check_type", "use") in {"remember", "retrieve", "use"} and isinstance(row.get("retrieved_facts"), (list, tuple))]
     for index, row in enumerate(fact_rows):
         expected.update(f"{index}:{fact}" for fact in _strings(row.get("expected_facts")))
         retrieved.update(f"{index}:{fact}" for fact in _strings(row.get("retrieved_facts")))
@@ -399,7 +407,7 @@ def _ordinal_alpha(cells: Sequence[Mapping[str, float]]) -> float | None:
         marginals[left] * marginals[right] * distance(left, right)
         for left in categories for right in categories
     ) / (total * (total - 1))
-    return 1.0 if expected == 0 and observed == 0 else (None if expected == 0 else 1 - observed / expected)
+    return None if expected == 0 else 1 - observed / expected
 
 
 def _nominal_alpha(cells: Sequence[Mapping[str, bool]]) -> float | None:
@@ -418,33 +426,15 @@ def _nominal_alpha(cells: Sequence[Mapping[str, bool]]) -> float | None:
         return None
     observed = sum(value for (left, right), value in coincidence.items() if left != right) / total
     expected = sum(marginals[left] * marginals[right] for left in (False, True) for right in (False, True) if left != right) / (total * (total - 1))
-    return 1.0 if expected == 0 and observed == 0 else (None if expected == 0 else 1 - observed / expected)
+    return None if expected == 0 else 1 - observed / expected
 
 
 def _kendall_w_incomplete(cells: Sequence[Mapping[str, float]], judges: Sequence[str]) -> tuple[float | None, list[str], int]:
-    """Use explicit midrank imputation only for isolated/missing judge cells."""
-    n = len(cells)
-    if n < 2:
-        return None, [], 0
-    usable = [judge for judge in judges if sum(judge in cell for cell in cells) >= 2]
-    if len(usable) < 2:
-        return None, usable, sum(judge not in cell for cell in cells for judge in usable)
-    ranked_by_judge: dict[str, list[float]] = {}
-    imputed = 0
-    for judge in usable:
-        observed_indices = [index for index, cell in enumerate(cells) if judge in cell]
-        observed_ranks = _ranks([cells[index][judge] for index in observed_indices])
-        scaled: dict[int, float] = {}
-        k = len(observed_indices)
-        for index, rank in zip(observed_indices, observed_ranks):
-            scaled[index] = 1 + (rank - 1) * (n - 1) / (k - 1) if k > 1 else (n + 1) / 2
-        ranked_by_judge[judge] = [scaled.get(index, (n + 1) / 2) for index in range(n)]
-        imputed += n - k
-    completed = [
-        {judge: ranked_by_judge[judge][index] for judge in usable}
-        for index in range(n)
-    ]
-    return _kendall_w(completed, usable), usable, imputed
+    """Require a complete panel; never replace missing observations with ranks."""
+    missing = sum(judge not in cell for cell in cells for judge in judges)
+    if missing or len(cells) < 2 or len(judges) < 2:
+        return None, list(judges), missing
+    return _kendall_w(cells, judges), list(judges), 0
 
 
 def _kendall_w(cells: Sequence[Mapping[str, float]], judges: Sequence[str]) -> float | None:
@@ -495,7 +485,7 @@ def _ranks(values: Sequence[float]) -> list[float]:
 
 
 def _number(value: Any) -> float | None:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
 
 
 def _text(payload: Mapping[str, Any], field: str) -> str:

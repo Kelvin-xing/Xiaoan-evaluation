@@ -1,3 +1,5 @@
+> 2026-09-13：此文件保留既有方法背景。最新完整設計、實作狀態、指標分母與限制已整合至 [根目錄 README](README.md)，評分與報表以 [v2 契約](evaluation/README/measurement-contract-v2.zh-HK.md) 為準。舊文字的品質零分、自評、rank插補、workbook欄位或能力狀態不應覆蓋v2。
+
 # XiaoAn Evaluation Methodology
 
 本文件定義 `evaluation/` 與 `evaluation_multimodels/` 如何評估 XiaoAn，以及如何把評估結果轉成 Chatflow、prompt、capsule 和知識檢索的可驗證改進。它是評分與診斷的共同契約；實際欄位以同一版本的 `ratings rule.yml`、case schema、manifest 和程式碼為準。
