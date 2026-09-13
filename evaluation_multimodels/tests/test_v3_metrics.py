@@ -84,7 +84,8 @@ def test_summarize_v3_aggregates_claim_classification_tool_and_agent_metrics() -
     assert summary["claims"]["fp"] == 1
     assert summary["claims"]["fn"] == 1
     assert summary["claims"]["faithfulness"] == 0.5
-    assert summary["answer"]["correctness_f1"] == 0.5
+    assert summary["answer"]["correctness_f1"] is None
+    assert summary["legacy_literal_diagnostics"]["literal_f1"] == 0.5
     assert summary["citations"]["precision"] == 0.5
     assert summary["citations"]["recall"] == 1.0
     assert summary["route"]["accuracy"] == 1.0

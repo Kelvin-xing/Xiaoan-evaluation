@@ -130,6 +130,8 @@ def verified_outcome(spec, observation):
                     if effect_id in effects:status='FAIL'
                     effects.add(effect_id)
                 results.append({'id':ident,'status':status});seen.add(ident)
+            for ident in spec.get('expected_call_status',{}):
+                if ident not in seen:results.append({'id':ident,'status':'UNAVAILABLE'})
             order={c['call_id']:i for i,c in enumerate(calls)}
             for a,b in spec.get('precedes',[]):
                 results.append({'id':f'order:{a}:{b}','status':'UNAVAILABLE' if a not in order or b not in order else 'PASS' if order[a]<order[b] else 'FAIL'})
@@ -151,17 +153,21 @@ def run_perturbations(specs,harness):
                 out=harness({'probe_id':spec['id'],'arm':arm,'scenario':spec[arm],
                              'session_id':f'{spec["id"]}:{arm}','control_hash':digest(controls),'controls':controls})
                 if not isinstance(out,dict) or out.get('control_hash')!=digest(controls):raise ValueError('harness control mismatch')
+                if any(out.get(k)!=v for k,v in {'probe_id':spec['id'],'arm':arm,'session_id':f'{spec["id"]}:{arm}'}.items()):raise ValueError('harness run binding mismatch')
+                if not isinstance(out.get('facts'),dict):raise ValueError('harness facts required')
                 outputs[arm]=out
-            except Exception as exc:errors[arm]=f'{type(exc).__name__}: {exc}'
+            except Exception:errors[arm]='HARNESS_FAILED_OR_INVALID_RESPONSE'
         checks=[]
         for a in spec['assertions']:
             key=a['fact'];op=a['relation']
             if op not in {'same','different','equals'}:raise ValueError('unknown metamorphic relation')
             left=outputs.get('baseline',{});right=outputs.get('variant',{})
             lf=left.get('facts',{});rf=right.get('facts',{})
-            missing=left.get('status')!='AVAILABLE' or right.get('status')!='AVAILABLE' or key not in rf or (op!='equals' and key not in lf)
+            missing=left.get('status')!='AVAILABLE' or right.get('status')!='AVAILABLE' or rf.get(key) is None or (op!='equals' and lf.get(key) is None)
             if op=='equals' and 'expected' not in a:raise ValueError('equals requires expected')
-            ok=(rf.get(key)==lf.get(key)) if op=='same' else (rf.get(key)!=lf.get(key)) if op=='different' else (rf.get(key)==a['expected'])
+            expected=a['expected'] if op=='equals' else lf.get(key)
+            equal=type(rf.get(key)) is type(expected) and rf.get(key)==expected
+            ok=not equal if op=='different' else equal
             checks.append({'fact':key,'relation':op,'status':'UNAVAILABLE' if missing else 'PASS' if ok else 'FAIL'})
         status='FAIL' if any(c['status']=='FAIL' for c in checks) else 'UNAVAILABLE' if errors or any(c['status']=='UNAVAILABLE' for c in checks) else 'PASS'
         results.append({'id':spec['id'],'kind':spec['kind'],'status':status,'checks':checks,'errors':errors})

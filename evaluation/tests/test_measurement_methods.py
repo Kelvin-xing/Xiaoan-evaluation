@@ -102,7 +102,7 @@ def test_probe_timeout_and_invariant_failure_remain_distinct():
     s={'id':'p','kind':'injection','controls':{'snapshot':'s'},'baseline':{},'variant':{},'assertions':[{'fact':'safe','relation':'same'}]}
     def failed(req):raise TimeoutError('synthetic')
     assert run_perturbations([s],failed)['probes'][0]['status']=='UNAVAILABLE'
-    def changed(req):return {'control_hash':req['control_hash'],'status':'AVAILABLE','facts':{'safe':req['arm']=='baseline'}}
+    def changed(req):return {**req,'status':'AVAILABLE','facts':{'safe':req['arm']=='baseline'}}
     assert run_perturbations([s],changed)['probes'][0]['status']=='FAIL'
 
 
@@ -174,3 +174,45 @@ def test_repeated_applied_side_effect_is_failure():
     spec,obs=outcome()
     for c in obs['calls']:c.update(side_effect_id='same-write',effect_applied=True)
     assert verified_outcome(spec,obs)['status']=='FAIL'
+
+
+def test_probe_null_type_binding_and_safe_errors():
+    spec={'id':'p','kind':'injection','controls':{'snapshot':'s'},'baseline':{},'variant':{},'assertions':[{'fact':'safe','relation':'same'}]}
+    def harness(req):return {**req,'status':'AVAILABLE','facts':{'safe':None}}
+    assert run_perturbations([spec],harness)['probes'][0]['status']=='UNAVAILABLE'
+    def typed(req):return {**req,'status':'AVAILABLE','facts':{'safe':True if req['arm']=='baseline' else 1}}
+    assert run_perturbations([spec],typed)['probes'][0]['status']=='FAIL'
+    def stale(req):return {**req,'session_id':'stale','status':'AVAILABLE','facts':{'safe':True}}
+    assert run_perturbations([spec],stale)['probes'][0]['status']=='UNAVAILABLE'
+    def failed(req):raise RuntimeError('Bearer synthetic-secret')
+    assert 'synthetic-secret' not in json.dumps(run_perturbations([spec],failed))
+    assert 'synthetic-secret' not in json.dumps(pairwise(pair_spec(),failed))
+
+
+def test_outcome_expected_call_absent_is_unavailable():
+    spec,obs=outcome();spec['precedes']=[];spec['expected_call_status']={'required-send':'SUCCESS'};obs['calls']=[]
+    assert verified_outcome(spec,obs)['status']=='UNAVAILABLE'
+
+
+def test_calibration_missing_extraction_and_invalid_labels():
+    spec=gold_spec();spec['predictions'][1]['labels'].pop('matched_claim_ids')
+    report=calibration(spec)['reports']['held_out']
+    assert report['claim_extraction_recall']['missing_unit_n']==1
+    spec['predictions'][1]['labels']['matched_claim_ids']='abc'
+    with pytest.raises(ValueError,match='string lists'):calibration(spec)
+    spec=gold_spec();spec['predictions'][1]['labels']['relations']['a']='made-up'
+    with pytest.raises(ValueError,match='relation'):calibration(spec)
+    spec=gold_spec();spec['predictions'].pop()
+    report=calibration(spec)['reports']['held_out']
+    assert report['red_lines']['danger']['missing_n']==1 and report['claim_extraction_recall']['missing_unit_n']==1
+
+
+def test_matrix_semantic_oracle_requires_approval_and_available_execution():
+    from xiaoan_eval.methodology_runtime import build_matrix_summaries
+    req,payload=oracle();row={'primary_eligible':True,'status':'PASS','scores':{},'oracle_assessment':validate(payload,req),'coverage':{'oracle_approved':False}}
+    summary=build_matrix_summaries([row])['semantic_oracle']
+    assert summary['verdict']=='UNAVAILABLE' and summary['unapproved_excluded_n']==1
+    row['coverage']['oracle_approved']=True
+    assert build_matrix_summaries([row])['semantic_oracle']['verdict']=='PASS'
+    row['status']='UNAVAILABLE'
+    assert build_matrix_summaries([row])['semantic_oracle']['verdict']=='UNAVAILABLE'

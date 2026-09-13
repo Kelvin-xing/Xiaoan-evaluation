@@ -42,7 +42,7 @@ def pairwise(spec,provider):
                         result=provider(request)
                         if not isinstance(result,dict) or result.get('winner') not in {'LEFT','RIGHT','TIE','INVALID'}:raise ValueError('invalid pairwise winner')
                         text(result.get('reason'),'reason')
-                    except Exception as exc:result={'winner':'INVALID','reason':f'{type(exc).__name__}: {exc}'}
+                    except Exception:result={'winner':'INVALID','reason':'PROVIDER_FAILED_OR_INVALID_RESPONSE'}
                 winner=result['winner'];version=left['version'] if winner=='LEFT' else right['version'] if winner=='RIGHT' else winner
                 orders.append(version)
                 decisions.append({'case_id':a['case_id'],'turn':a['turn'],'judge_id':judge,'reversed':reverse,'winner_version':version,'reason':result['reason'],'request_hash':digest(request)})
@@ -83,10 +83,12 @@ def calibration(spec):
         group=[r for r in rows if r['split']==split];binary=defaultdict(list);errors=defaultdict(list);claims=[];relations=[];missing=0
         for r in group:
             p=index.get(r['id'])
-            if not p or p.get('status')!='AVAILABLE':missing+=1;continue
-            if p.get('content_hash')!=r['content_hash']:raise ValueError('prediction content binding mismatch')
-            if p.get('benchmark_hash')!=spec['benchmark_hash']:raise ValueError('prediction benchmark mismatch')
-            gold=r['gold'];pred=p['labels']
+            unavailable=not p or p.get('status')!='AVAILABLE'
+            if unavailable:missing+=1
+            else:
+                if p.get('content_hash')!=r['content_hash']:raise ValueError('prediction content binding mismatch')
+                if p.get('benchmark_hash')!=spec['benchmark_hash']:raise ValueError('prediction benchmark mismatch')
+            gold=r['gold'];pred={} if unavailable else p['labels']
             for key,val in gold.get('red_lines',{}).items():
                 actual=pred.get('red_lines',{}).get(key)
                 if type(val)!=bool:raise ValueError('gold red-line label must be boolean')
@@ -102,12 +104,18 @@ def calibration(spec):
             # Explicit human claim ID matching (produced by reviewed span alignment),
             # not string equality on claim text. Unknown/spurious IDs count as FP.
             gc=gold.get('claim_ids');pc=pred.get('matched_claim_ids')
+            for values in (gc,pc):
+                if values is not None and (not isinstance(values,list) or any(not isinstance(x,str) or not x.strip() for x in values)):raise ValueError('claim alignment IDs must be string lists')
+            if gc is not None and pc is None:
+                claims.append({'case_id':r['case_id'],'unit_id':r['id'],'value':None,'tp':0,'fp':0,'fn':0})
             if gc is not None and pc is not None:
                 if len(gc)!=len(set(gc)) or len(pc)!=len(set(pc)):raise ValueError('duplicate claim alignment IDs')
                 g=set(gc);q=set(pc)
                 claims.append({'case_id':r['case_id'],'unit_id':r['id'],'value':len(g&q)/len(g) if g else None,'tp':len(g&q),'fp':len(q-g),'fn':len(g-q)})
             for key,val in gold.get('relations',{}).items():
                 actual=pred.get('relations',{}).get(key)
+                vocabulary={'support','contradict','unrelated','unknown','not_applicable'}
+                if val not in vocabulary or (actual is not None and actual not in vocabulary):raise ValueError('unknown evidence relation label')
                 relations.append({'case_id':r['case_id'],'unit_id':f'{r["id"]}:{key}','value':float(val==actual) if actual is not None else None})
         red={}
         for key,triples in binary.items():

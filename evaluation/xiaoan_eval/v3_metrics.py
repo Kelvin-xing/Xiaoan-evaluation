@@ -263,12 +263,20 @@ def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 if claim_totals.total_claims else None
             ),
         },
+        "legacy_literal_diagnostics": {
+            "status": "DEPRECATED_LITERAL_MATCH_NOT_TASK_CORRECTNESS",
+            "literal_f1": claim_totals.f1,
+            "literal_recall": claim_totals.recall,
+            "literal_forbidden_count": forbidden_seen,
+            "literal_forbidden_rate": forbidden_seen / judged_claim_count if judged_claim_count else None,
+        },
         "answer": {
-            "correctness_f1": claim_totals.f1,
-            "completeness_recall": claim_totals.recall,
+            "correctness_f1": None,
+            "task_correctness_source": "semantic_oracle; literal matching is diagnostic only",
+            "completeness_recall": None,
             "faithfulness": claim_totals.faithfulness,
-            "forbidden_claim_count": forbidden_seen,
-            "forbidden_claim_rate": forbidden_seen / judged_claim_count if judged_claim_count else None,
+            "forbidden_claim_count": None,
+            "forbidden_claim_rate": None,
             "length_compliance_rate": _mean(length_checks),
         },
         "capsule_attribution": {
@@ -502,14 +510,14 @@ def _non_negative_int(value: Any) -> int:
 def render_v3_markdown(summary: Mapping[str, Any]) -> str:
     calibration = summary.get("judge_calibration", {})
     claims = summary.get("claims", {})
-    lines = ["# XiaoAn v3 evaluation", "", "## Claim metrics", "",
+    lines = ["# XiaoAn v3 evaluation", "", "Legacy claim matching below is literal diagnostic matching, not semantic task correctness. See Semantic Oracle for task assessment.", "", "## Claim metrics", "",
              "| Metric | Value |", "| --- | ---: |"]
     for key in ("tp", "fp", "fn", "precision", "recall", "f1"):
         lines.append(f"| claim_{key} | {claims.get(key, 'n/a')} |")
     lines += ["", "## Judge calibration", "", "| Metric | Value |", "| --- | ---: |"]
     for key, value in calibration.items():
         lines.append(f"| {key} | {value if value is not None else 'n/a'} |")
-    for section in ("semantic_oracle", "answer", "citations", "semantic_attribution", "route", "safety", "refusal", "tools", "agent", "statistics", "human_calibration"):
+    for section in ("semantic_oracle", "legacy_literal_diagnostics", "answer", "citations", "semantic_attribution", "route", "safety", "refusal", "tools", "agent", "statistics", "human_calibration"):
         values = summary.get(section, {})
         if not isinstance(values, Mapping):
             continue

@@ -280,7 +280,7 @@ Focus 提高指定維度權重，**仍計算所有七維度**。普通 pipeline�
 
 ### 6.2 Legacy 指標必須按真實公式解讀
 
-goal expected=false、actual=false 可以使現有 `goal_completion_rate` 很高；它表示符合預期狀態，不表示 agent 完成外部任務。工具名與參數符合也不能證明工具成功、獲得授權或沒有重複副作用。新版 verified outcomes、success-conditioned cost、partial-order tools 是後續設計，不是已發布的完成能力。
+goal expected=false、actual=false 可以使現有 `goal_completion_rate` 很高；它表示符合預期狀態，不表示 agent 完成外部任務。工具名與參數符合也不能證明工具成功、獲得授權或沒有重複副作用。v3 的 `measure outcome` 已提供獨立 observer 的狀態、授權、副作用及 partial-order 驗證；`measure online` 提供成功 session 的成本統計。這些需實際觀測資料，舊 goal rate 仍不能當成 verified completion。
 
 <a id="attribution"></a>
 ## 7. Trace、RAG 與語義歸因
@@ -539,8 +539,9 @@ Schema 2.1 保存 `quality_status`、`quality_verdict`、`quality_threshold`、`
 | 狀態 | 內容 |
 | --- | --- |
 | 已實作並有離線回歸 | v2加權、缺失分離、threshold verdict、typed case/scenario facts、report pair、人評/裁決、matrix凍結答案與自評隔離、memory類型判斷、agreement退化處理 |
-| 有程式但需資料／插件 | retrieval ranking、response claims、semantic attribution、完整 memory summary、human benchmark calibration、實驗與 stability |
-| 仍有限／待完善 | 完整 pairwise CLI及版本勝率、工具結果／權限／副作用、verified goal completion、成功條件下效率、case-cluster CI、公平共同Judge panel、逐情境rubric applicability |
+| v3 已實作並有合成回歸 | semantic oracle、獨立 truth/context 回答評估、排序 metrics、雙序 pairwise、case-cluster CI、observer 結果與工具檢查、擾動 harness 契約、人工校準、online 事件分析 |
+| 有程式但需真實資料／插件 | relevance qrels、factual gold、human benchmark、真實 observer/harness、完整 memory summary、線上研究 |
+| 仍有限／待完善 | 公平共同 Judge panel、逐情境 rubric applicability、真實 session 隔離與 fault injection 的 adapter 驗證；既有 stability 報告不能自動推導語意正確或因果改善 |
 | 資料尚未覆蓋 | default response oracle已核准217輪，仍需Judge語意校準；memory僅6個use、APPROVED_AGGREGATE=0；七案memory提案已核准內容但仍待harness |
 | 維護工作 | 兩套核心仍複製；需持續共用contract fixtures並逐步提取core package |
 
@@ -553,3 +554,5 @@ Schema 2.1 保存 `quality_status`、`quality_verdict`、`quality_threshold`、`
 ## 評估方法 v3 實作更新
 
 [操作、公式、範例與資料契約](evaluation/README/measurement-methods-v3.zh-HK.md)涵蓋九類方法。新的semantic oracle獨立於faithfulness，以穩定R/F ID、答案span及binding評估；舊literal correctness_f1僅歷史相容。另有獨立truth/context回答評估、排序metrics、雙序pairwise、case-cluster統計、observer結果驗證、擾動harness、人工校準與線上事件分析。未提供真實gold／harness／線上資料時保持未驗證，不宣稱實際產品能力通過。
+
+驗收：standalone `evaluation` **274 passed**、`evaluation_multimodels` **318 passed**；18 個 CLI 示例完成。[審查與測試紀錄](docs/implementation/evaluation-methods-v3-validation.md)。

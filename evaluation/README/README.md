@@ -17,7 +17,7 @@
 | Attribution | 可選插件，需要snapshot及span/ref驗證，不是trace路由推論 |
 | 人工覆核／裁決 | blinded XLSX、immutable binding、原權重、重算final verdict |
 | Baseline／experiment／stability | 已有流程；固定版本、可比資料、單變量，不等於自動因果證明 |
-| 整批答案先凍結再任意重評／pairwise CLI | 尚未在ordinary run提供完整流程 |
+| 凍結答案的雙序 pairwise CLI | `measure pairwise` 提供独立入口；ordinary run 尚非整批先凍結的調度模式 |
 
 ## 2. 安裝與環境
 
@@ -106,7 +106,7 @@ xiaoan-eval import-human-review private-review/team-review.xlsx \
 
 ## 9. 驗證與待辦
 
-v2本機完整測試248 passed；發布前亦於standalone clone驗證。全部為離線合成／mock測試，不代表真實case通過率。Known gaps包括response oracle語意校準與task outcome驗證、真正工具結果與goal outcome、逐情境rubric、人類benchmark、case-cluster不確定性、核心去重；詳見Shared Guide第15節。
+v2本機完整測試248 passed；發布前亦於standalone clone驗證。全部為離線合成／mock測試，不代表真實case通過率。v3 已補語意 oracle、observer task outcome、工具檢查及 case-cluster 方法入口；待完成真實資料校準、observer/harness 接線、逐情境 rubric、人類 benchmark 與核心去重；詳見 Shared Guide 第15節及 v3 方法文件。
 
 ## Response oracle 已核准（2026-09-13）
 

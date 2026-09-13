@@ -42,9 +42,9 @@ python -m xiaoan_eval measure online examples/measurement/online.json --output /
 
 R必要項滿足、F禁止項違反需要非空的有效答案span。缺漏R可用空span但必須解釋；F項只是被引述後否定不算違反。Judge仍需作語意判斷；本地不以字串完全相等評定是否涵蓋R/F。
 
-matrix請求包含同一契約，row與checkpoint保存assessment，`Measurement_Contract`sheet及Markdown輸出摘要。matrix prompt版本升至v2避免靜默沿用舊prompt結果。自評排除仍按現有primary eligibility政策。獨立`measure pairwise`用於正式雙序版本比較；舊`run_pairwise_pass`保留兼容，不將其單序helper當新流程。
+matrix請求包含同一契約，row與checkpoint保存assessment，`Measurement_Contract`sheet及Markdown輸出摘要。matrix prompt版本升至v2避免靜默沿用舊prompt結果。自評排除仍按現有 primary eligibility 政策；只有明確核准的 oracle 進主要語意摘要，執行失敗保留 unavailable，另報 subject/Judge 分層及未批准排除數。獨立`measure pairwise`用於正式雙序版本比較；舊`run_pairwise_pass`保留兼容，不將其單序helper當新流程。
 
-舊`score_claims`／`answer.correctness_f1`保留作歷史相容，明確標記`DEPRECATED_LITERAL_MATCH_NOT_TASK_CORRECTNESS`。新任務符合度讀`semantic_oracle`；獨立事實正確性讀`measure answer`的correctness，不把舊F1重新命名成真值正確率。七維度品質門檻與任務verdict分開，不用任務分數偷偷改動quality權重。
+舊 `score_claims` 的數值移至 `legacy_literal_diagnostics`，明確標記 `DEPRECATED_LITERAL_MATCH_NOT_TASK_CORRECTNESS`；`answer.correctness_f1`／`completeness_recall`／forbidden 舊語意欄位輸出 null，Markdown 顯示 legacy 警語。新任務符合度讀`semantic_oracle`；獨立事實正確性讀`measure answer`的correctness，不把舊F1重新命名成真值正確率。七維度品質門檻與任務verdict分開，不用任務分數偷偷改動quality權重。
 
 ## 檢索公式與主流程
 
@@ -65,3 +65,9 @@ matrix請求包含同一契約，row與checkpoint保存assessment，`Measurement
 ## 尚需真實運行完成的工作
 
 程式具備入口後，團隊仍需提供：人工relevance qrels、獨立factual gold、完成盲審與仲裁的benchmark、接到真實SUT及observer的harness，以及經批准收集的線上session事件。這些不是用mock可以「完成」的研究結果。Oracle批准狀態與APPROVED_AGGREGATE保持既有人工決策，未自動擴大suite或宣稱模型能力已驗證。
+
+## 審查後加固
+
+擾動結果須回傳與請求一致的 `probe_id`、`arm`、`session_id`、`control_hash`；facts 為 null 視作缺失，bool 與數字不互相等同。配置的預期工具呼叫缺失為 UNAVAILABLE。插件例外只保存固定錯誤碼，避免原始 transport exception 把憑證帶入報表。
+
+Calibration 的 claim IDs 必須是字串陣列；缺 matching 保留 null unit。relation vocabulary 為 `support`、`contradict`、`unrelated`、`unknown`、`not_applicable`，不能以任意同字串得到 agreement。

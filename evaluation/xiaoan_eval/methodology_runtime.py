@@ -37,6 +37,10 @@ def build_matrix_summaries(rows: Sequence[Mapping[str, Any]], *, memory_results:
     red_line_ids = sorted({str(identifier) for row in rows for identifier in (*row.get("expected_red_line_ids", ()), *row.get("red_line_evidence", {}))})
     attribution_available = sum(item.get("status") == "AVAILABLE" for item in attribution_results)
     attribution_status = "NOT_RUN" if not attribution_results else "AVAILABLE" if attribution_available else "UNAVAILABLE"
+    oracle_rows = [row for row in rows if row.get("primary_eligible", True) and row.get("coverage", {}).get("oracle_approved") is True]
+    def oracle_summary(selected):
+        return summarize_oracles([row.get("oracle_assessment") if row.get("status") == "PASS" else None for row in selected])
+    pairs = sorted({(str(row.get("subject", "")), str(row.get("judge", ""))) for row in oracle_rows})
     return {
         "primary_denominator": {
             "eligible_n": sum(row.get("status") == "PASS" and row.get("primary_eligible", True) for row in rows),
@@ -44,7 +48,7 @@ def build_matrix_summaries(rows: Sequence[Mapping[str, Any]], *, memory_results:
             "self_excluded_n": sum(bool(row.get("self_judging")) and not row.get("primary_eligible", True) for row in rows),
             "operationally_unavailable_n": sum(row.get("status") != "PASS" for row in rows),
         },
-        "semantic_oracle": summarize_oracles([row.get("oracle_assessment") for row in rows if row.get("primary_eligible", True)]),
+        "semantic_oracle": {**oracle_summary(oracle_rows), "unapproved_excluded_n": sum(row.get("primary_eligible", True) and row.get("coverage", {}).get("oracle_approved") is not True for row in rows), "by_subject_judge": [{"subject": subject, "judge": judge, **oracle_summary([row for row in oracle_rows if str(row.get("subject", "")) == subject and str(row.get("judge", "")) == judge])} for subject, judge in pairs]},
         "validity_status": "NOT_CALIBRATED_BY_THIS_RUN",
         "agreement": {dimension: agreement_report(rows, dimension) for dimension in dimensions},
         "dimensions": {dimension: robust_dimension_summary(rows, dimension) for dimension in dimensions},

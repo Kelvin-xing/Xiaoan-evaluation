@@ -25,6 +25,7 @@ def plugin(name):
 def run(args):
     source=Path(args.input);spec=json.loads(source.read_text(encoding='utf-8'))
     if not isinstance(spec,dict) or spec.get('schema_version')!=VERSION:raise ValueError(f'schema_version must be {VERSION}')
+    input_hash=digest(spec)  # Reject non-finite JSON before any provider invocation.
     out=Path(args.output)
     # Never overwrite input or an existing reviewer report.
     out.mkdir(parents=True,exist_ok=True)
@@ -48,7 +49,7 @@ def run(args):
     elif args.method=='perturbation':result=run_perturbations(spec['probes'],provider)
     elif args.method=='calibration':result=calibration(spec)
     else:result=online_summary(spec['rows'])
-    envelope={'schema_version':VERSION,'method':args.method,'input_hash':digest(spec),'result':result,
+    envelope={'schema_version':VERSION,'method':args.method,'input_hash':input_hash,'result':result,
               'provenance':{'provider':args.provider,'egress_validator':args.egress_validator},
               'validity':'MEASUREMENT_ONLY_NOT_REAL_WORLD_SAFETY_CERTIFICATION'}
     content=json.dumps(envelope,ensure_ascii=False,indent=2,allow_nan=False)+'\n'
