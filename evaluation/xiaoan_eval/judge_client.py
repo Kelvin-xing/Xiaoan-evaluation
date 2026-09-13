@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
+from .oracle_judge import contract as oracle_contract, validate as validate_oracle
 from collections.abc import Callable as ABCCallable
 from typing import Any, Callable, Mapping, Protocol
 
@@ -30,6 +32,7 @@ class JudgeClient:
 
     def judge(self, request: Mapping[str, Any]) -> JudgeResult:
         """Invoke an injected provider once and validate its untrusted output."""
+        request = {**request, "oracle_contract": oracle_contract(request)}
         raw = _invoke(self._provider, request)
         usage = getattr(raw, "usage", {})
         if self._checkpoint is not None:
@@ -46,7 +49,7 @@ class JudgeClient:
         if not isinstance(catalog, list):
             raise TypeError("judge request evidence_catalog must be an array")
         validate_claim_evidence(result, catalog)
-        return result
+        return replace(result, oracle_assessment=validate_oracle(result.oracle_assessment, request))
 
 
 def _invoke(provider: Any, request: Mapping[str, Any]) -> str:

@@ -1,6 +1,7 @@
 """Optional second-pass runtime over immutable answer artifacts."""
 
 from __future__ import annotations
+from .oracle_judge import summarize as summarize_oracles
 
 from dataclasses import asdict
 import json
@@ -43,6 +44,7 @@ def build_matrix_summaries(rows: Sequence[Mapping[str, Any]], *, memory_results:
             "self_excluded_n": sum(bool(row.get("self_judging")) and not row.get("primary_eligible", True) for row in rows),
             "operationally_unavailable_n": sum(row.get("status") != "PASS" for row in rows),
         },
+        "semantic_oracle": summarize_oracles([row.get("oracle_assessment") for row in rows if row.get("primary_eligible", True)]),
         "validity_status": "NOT_CALIBRATED_BY_THIS_RUN",
         "agreement": {dimension: agreement_report(rows, dimension) for dimension in dimensions},
         "dimensions": {dimension: robust_dimension_summary(rows, dimension) for dimension in dimensions},

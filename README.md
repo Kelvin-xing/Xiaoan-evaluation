@@ -261,7 +261,7 @@ Focus 提高指定維度權重，**仍計算所有七維度**。普通 pipeline�
 | Unsupported claim rate | (judged claims − supported claims) / judged claims | 同上；無 claims→null | required 但 unsupported 也算 unsupported |
 | Legacy `correctness_f1` | 現有 completeness F1 的別名 | TP=支持且命中required；FP=不支持的extra；FN=未支持required | **不是獨立事實正確率**；既有零分邊界仍需細化 |
 | Citation / layer evidence P/R | 匹配 refs 的 TP/(TP+FP)、TP/(TP+FN) | 明確 oracle refs 與合法 evidence catalog | 引用對應；缺合法gold不恢復 ground_refs 作 recall |
-| MRR / nDCG | 首個相關rank倒數；DCG/IDCG | 有序候選、relevance labels、固定k／gain | helper 條件式可用；不是有ref就有ranking評估 |
+| MRR / nDCG | 首個相關rank倒數；DCG/IDCG | 有序候選、relevance labels、固定k／gain | v3已實作全套排序計算與主報告接線；需reviewed qrels和匹配版本，不是有ref就有ranking評估 |
 | Semantic claim support | 每claim最大 relation權重的平均 | 驗證的 answer/evidence spans + snapshot | 語義支持，不是因果使用率 |
 | Policy compliance | applicable policies 的 1/0.5/0 加權平均 | 適用性與 compliance 判定 | uncertain/NA 不混入分母 |
 | Exposed-unit utilization | 被支持關係引用的 occurrence / exposed occurrence | exposure catalog、occurrence IDs | 可觀察使用痕跡；來源層可重疊 |
@@ -352,7 +352,7 @@ Generic flag 仍是較弱證據。真正的 update、forgetting／expiry、multi
 - **Krippendorff ordinal alpha**：同 unit 多 Judge 序位一致性；nominal alpha 用於紅線二元標籤。兩者均為 `1−Do/De`；De=0 或資料不足 → UNAVAILABLE，不能當 1。
 - **Kendall W**：只在同 case/turn 內比較 subjects 排名。缺 rank 不插補；panel 不完整、樣本不足或常數 ranks → UNAVAILABLE。5×5 刪對角線後往往不是完整共同 panel，因此 W 不可用是合理結果。
 - **Spearman rho**：兩 Judge 在共同 units 上的排序相關；当前是 pooled case/turn/subject 描述統計，可能混入案例難度，不能單獨代表每 case 排名一致。
-- **Pairwise**：存在盲序 LEFT/RIGHT/TIE/INVALID helper；完整 CLI／正式報告尚未接線。現有請求上下文和 left/right→版本勝負歸屬仍需加強，不能宣稱已有正式 A/B 勝率產品。
+- **Pairwise**：`measure pairwise`已提供同問題/history/rubric、控制摘要及答案hash綁定，雙向盲序、TIE/INVALID、版本勝負映射、順序不一致與case-cluster區間。原單序helper僅保留相容。
 
 所有 agreement 標為 `DESCRIPTIVE_ONLY`；`NOT_CALIBRATED_BY_THIS_RUN` 表示本 run 沒完成效度校準，不是斷言團隊從未做過任何人評。
 
@@ -444,7 +444,7 @@ failure observation → evidence-supported root-cause hypothesis
 
 目前 `evaluator-config.yml` 的實驗預設是三次 seeds `[101,202,303]`，target pass-rate delta≥0.10、weighted delta≥0.15、非目標最大退步≤0.10、critical hard-gate regression=0。這些是**目前配置**，不是研究證明的通用門檻。推薦在受控證據前只是 hypothesis。
 
-Stability 比較同配置重跑的 route、refs、回答等變化。多次穩定地答錯仍可能高度穩定。現有 turn-bootstrap CI 未完整處理 case 內相關性；正式推論仍需 case-cluster／配對設計及小樣本區間。
+Stability 比較同配置重跑的 route、refs、回答等變化。多次穩定地答錯仍可能高度穩定。v3 route/safety區間已改用case-macro cluster bootstrap，另有`measure cluster`的paired模式；少於兩個case不輸出CI，仍須注意小樣本與外推限制。
 
 <a id="usage"></a>
 ## 13. 安裝、命令與整合契約
@@ -544,8 +544,12 @@ Schema 2.1 保存 `quality_status`、`quality_verdict`、`quality_threshold`、`
 | 資料尚未覆蓋 | default response oracle已核准217輪，仍需Judge語意校準；memory僅6個use、APPROVED_AGGREGATE=0；七案memory提案已核准內容但仍待harness |
 | 維護工作 | 兩套核心仍複製；需持續共用contract fixtures並逐步提取core package |
 
-下一步順序：先審閱 response/memory 草案與遙測映射，再建立凍結人工 benchmark／Judge校準，補真正 outcome 與 tool/session harness，最後擴大重複實驗与持續回歸。**可靠的評估成果是「可重現、可解釋、知道未測到什麼」，而不只是更高的平均分。**
+下一步順序：response oracle已核准、v3方法入口已實作；接著提供獨立檢索／factual gold、完成真實人工benchmark與Judge校準、接入實際observer/harness，再執行重複與線上研究。**可靠的評估成果是「可重現、可解釋、知道未測到什麼」，而不只是更高的平均分。**
 
 ## Response oracle 核准更新
 
 使用者已全部核准81案231輪，詳見[審核紀錄與驗證](docs/response-oracle-review/2026-09-13/README.md)。既有74案已套用新response oracle；舊baseline不可視為已驗證新內容。此操作沒有觸發live API評估。
+
+## 評估方法 v3 實作更新
+
+[操作、公式、範例與資料契約](evaluation/README/measurement-methods-v3.zh-HK.md)涵蓋九類方法。新的semantic oracle獨立於faithfulness，以穩定R/F ID、答案span及binding評估；舊literal correctness_f1僅歷史相容。另有獨立truth/context回答評估、排序metrics、雙序pairwise、case-cluster統計、observer結果驗證、擾動harness、人工校準與線上事件分析。未提供真實gold／harness／線上資料時保持未驗證，不宣稱實際產品能力通過。

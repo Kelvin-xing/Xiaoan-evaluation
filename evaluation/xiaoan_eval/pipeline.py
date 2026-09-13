@@ -236,6 +236,7 @@ class EvaluationPipeline:
                 )
             )
             observation["judge"] = {
+                "oracle_assessment": primary.oracle_assessment,
                 "faithfulness_claims": [asdict(item) for item in primary.faithfulness_claims],
                 "legal_claims": [asdict(item) for item in primary.legal_claims],
             }
@@ -474,6 +475,7 @@ def _turn_observation(
             "route_id": route.get("id", route.get("route_id", route.get("capsule_id"))),
             "retrieved_refs": list(resolved) if _is_sequence(resolved) else [],
             "ranked_refs": list(ranked) if _is_sequence(ranked) else None,
+            "retrieval_versions": ground.get("retrieval_versions"),
             "abstained": answer.get("abstained", trace.get("abstained")),
             "citations": _section_refs(answer, ("citations", "citation_refs")),
             "response_chars": len(actual_response) if isinstance(actual_response, str) else None,

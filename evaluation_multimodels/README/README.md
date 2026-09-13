@@ -138,3 +138,7 @@ v2本機完整測試292 passed；發布前亦在standalone clone驗證。測試�
 ## Response oracle 已核准（2026-09-13）
 
 [審核紀錄與Excel](../../docs/response-oracle-review/2026-09-13/README.md)：使用者mat已全部核准81案231輪。既有74案217輪已回寫正式來源；另7案14輪memory提案保留proposed，尚未納入預設suite。全部內容標记REVIEWED，APPROVED_AGGREGATE仍為0。核准內容不等同agent已通過評估。
+
+## 評估方法 v3
+
+[完整操作與資料契約](measurement-methods-v3.zh-HK.md)：新增`measure`的answer/retrieval/oracle/pairwise/cluster/outcome/perturbation/calibration/online入口。主Judge已接semantic oracle，排序報告可讀已reviewed retrieval oracle及匹配trace版本。真實gold、harness與線上資料仍由團隊提供，不把合成範例當產品能力驗證。

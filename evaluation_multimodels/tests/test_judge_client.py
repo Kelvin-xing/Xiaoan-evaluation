@@ -15,4 +15,6 @@ def test_client_injects_provider_and_validates_response() -> None:
     client = JudgeClient(lambda request: seen.append(request) or json.dumps(payload), rule)
     result = client.judge({"response": "answer"})
     assert result.dimensions[0].score == 2
-    assert seen == [{"response": "answer"}]
+    assert seen[0]["response"] == "answer"
+    assert seen[0]["oracle_contract"]["items"] == []
+    assert result.oracle_assessment["status"] == "NOT_APPLICABLE"

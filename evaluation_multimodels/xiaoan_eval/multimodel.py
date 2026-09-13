@@ -6,6 +6,7 @@ public workbook.  Provider failures are retained as UNAVAILABLE observations.
 """
 
 from __future__ import annotations
+from .oracle_judge import contract as oracle_contract, validate as validate_oracle, summarize as summarize_oracles, response_schema as oracle_response_schema
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, is_dataclass
@@ -42,7 +43,7 @@ DEFAULT_MODEL_PAIRS = {
 }
 JUDGE_EVIDENCE_SCHEMA_VERSION = "judge-evidence/v1"
 MATRIX_JUDGE_REQUEST_SCHEMA_VERSION = "matrix-judge-request/v3"
-MATRIX_JUDGE_PROMPT_SCHEMA_VERSION = "matrix-judge-prompt/v1"
+MATRIX_JUDGE_PROMPT_SCHEMA_VERSION = "matrix-judge-prompt/v2"
 JUDGE_CONTEXT_LAYERS = frozenset({"CAPSULE", "WIKI", "SOURCE"})
 
 
@@ -575,6 +576,7 @@ def _resume_row(answer_event: Mapping[str, Any], judgement_event: Mapping[str, A
         judged_data["error_type"] = cell.get("judgement_error_type")
     judged = asdict(_provider_response_from_mapping(judged_data))
     return {
+        "oracle_assessment": cell.get("oracle_assessment"),
         "answer_id": cell["answer_id"],
         "case_id": cell.get("case_id"),
         "turn": cell.get("turn"),
@@ -921,6 +923,10 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
                             "judge_evidence": judge_evidence,
                             "expected": _json_value(_field(turn, "expected")),
                         }
+                        oracle_request = {"assistant_answer": answer.text, "redacted_user_input": prompt, "redacted_conversation_history": list(history), "expected": dynamic_judge_request["expected"]}
+                        dynamic_judge_request["oracle_contract"] = oracle_contract(oracle_request)
+                        stable_judge_request["oracle_response_schema"] = oracle_response_schema()
+                        stable_judge_request["instruction"] += " Also return oracle_assessment matching oracle_response_schema and oracle_contract instructions."
                         judge_prompt = _judge_prompt(stable_judge_request, dynamic_judge_request)
                     except JudgeEvidenceError as exc:
                         evidence_error = f"JudgeEvidenceError: {exc}"
@@ -932,12 +938,17 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
                     if provider_called:
                         savepoint({"event": "judgement", "task_id": f"{lane_id}:turn:{turn_number}:judge:{judge.id}", "answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": asdict(subject), "judge": asdict(judge), "judgement": asdict(judged), "dag_node_id": f"judge:{answer_id}:{judge.id}", "parent_node_ids": [f"answer:{answer_id}"]})
                     judged, scores, triggered_red_lines, red_line_evidence = _validated_scores(judged, rating_rule)
+                    try:
+                        oracle_value = validate_oracle(json.loads(judged.text).get("oracle_assessment") if judged.status == "PASS" else None, {"assistant_answer": answer.text, "redacted_user_input": prompt, "redacted_conversation_history": list(history), "expected": _json_value(_field(turn, "expected"))})
+                    except (ValueError, TypeError) as exc:
+                        oracle_value = {"status": "UNAVAILABLE", "items": [], "reason": str(exc)}
                     is_self_judging = self_judging(asdict(subject), asdict(judge))
                     row = {
                         "answer_id": answer_id, "case_id": case_id, "turn": turn_number,
                         "subject": {**asdict(subject), "id": subject.id},
                         "judge": {**asdict(judge), "id": judge.id},
                         "answer": answer_data, "judgement": asdict(judged), "scores": scores,
+                        "oracle_assessment": oracle_value,
                         "expected_red_line_ids": tuple(item.id for item in rating_rule.red_lines),
                         "triggered_red_lines": triggered_red_lines,
                         "red_line_evidence": red_line_evidence,
@@ -952,7 +963,7 @@ def run_matrix(cases: Sequence[Any], subjects: Sequence[ModelSpec], judges: Sequ
                         "status": "PASS" if answer.status == judged.status == "PASS" else "UNAVAILABLE",
                     }
                     turn_rows[index] = row
-                    savepoint({"event": "cell", "task_id": f"{lane_id}:turn:{turn_number}:cell:{judge.id}", "dag_node_id": f"cell:{answer_id}:{judge.id}", "parent_node_ids": [f"answer:{answer_id}", f"judge:{answer_id}:{judge.id}"], "row": {"answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": row["subject"], "judge": row["judge"], "judgement_status": judged.status, "judgement_error": judged.error, "judgement_error_type": judged.error_type, "scores": row["scores"], "expected_red_line_ids": row["expected_red_line_ids"], "triggered_red_lines": row["triggered_red_lines"], "red_line_evidence": row["red_line_evidence"], "self_judging": row["self_judging"], "primary_eligible": row["primary_eligible"], "coverage": row["coverage"], "memory_metrics": row["memory_metrics"], "attribution": row["attribution"], "weighted_score": row["weighted_score"], "expected_turns": row["expected_turns"], "scoring_contract_version": SCORING_CONTRACT_VERSION, "status": row["status"]}})
+                    savepoint({"event": "cell", "task_id": f"{lane_id}:turn:{turn_number}:cell:{judge.id}", "dag_node_id": f"cell:{answer_id}:{judge.id}", "parent_node_ids": [f"answer:{answer_id}", f"judge:{answer_id}:{judge.id}"], "row": {"answer_id": answer_id, "case_id": case_id, "turn": turn_number, "subject": row["subject"], "judge": row["judge"], "judgement_status": judged.status, "judgement_error": judged.error, "judgement_error_type": judged.error_type, "oracle_assessment": row["oracle_assessment"], "scores": row["scores"], "expected_red_line_ids": row["expected_red_line_ids"], "triggered_red_lines": row["triggered_red_lines"], "red_line_evidence": row["red_line_evidence"], "self_judging": row["self_judging"], "primary_eligible": row["primary_eligible"], "coverage": row["coverage"], "memory_metrics": row["memory_metrics"], "attribution": row["attribution"], "weighted_score": row["weighted_score"], "expected_turns": row["expected_turns"], "scoring_contract_version": SCORING_CONTRACT_VERSION, "status": row["status"]}})
 
                 pending: list[tuple[int, ModelSpec]] = []
                 for index, judge in enumerate(judge_list):
@@ -1063,6 +1074,7 @@ def render_matrix_report(rows: Sequence[Mapping[str, Any]]) -> str:
     lines.extend([
         "", "## Measurement contract", "",
         f"Primary eligible: {denominator['eligible_n']}; self-judging isolated: {denominator['self_excluded_n']}; operationally unavailable: {denominator['operationally_unavailable_n']}.",
+        "Semantic oracle: " + json.dumps(summaries["semantic_oracle"], ensure_ascii=False),
         f"Memory: {summaries['memory']['status']} (eligible={summaries['memory']['eligible_n']}, missing={summaries['memory']['missing_n']}).",
         f"Dedicated attribution: {summaries['attribution']['status']} (eligible={summaries['attribution']['eligible_n']}, missing={summaries['attribution']['missing_n']}).",
         "Agreement statistics are DESCRIPTIVE_ONLY and do not establish correctness. Missing ranks are not imputed; constant or insufficient data yield UNAVAILABLE alpha/W. Different subjects may have different judge panels after self-exclusion or provider failures, so cross-subject comparisons are exploratory.",
@@ -1178,7 +1190,7 @@ def write_matrix_workbook(rows: Sequence[Mapping[str, Any]], path: Path) -> None
     )
     contract_sheet = workbook.create_sheet("Measurement_Contract")
     append_text_safe(contract_sheet, ["section", "json"])
-    for name in ("primary_denominator", "memory", "attribution"):
+    for name in ("primary_denominator", "memory", "attribution", "semantic_oracle"):
         append_text_safe(contract_sheet, [name, json.dumps(summaries[name], ensure_ascii=False, sort_keys=True)])
     agreement_sheet = workbook.create_sheet("Judge_Agreement")
     append_text_safe(agreement_sheet, ["dimension", "interpretation", "eligible_n", "missing_n", "krippendorff_alpha_ordinal", "kendall_w", "pairwise_spearman_json", "alpha_status", "alpha_reason", "kendall_strata_json"])

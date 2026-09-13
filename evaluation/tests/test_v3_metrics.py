@@ -99,7 +99,8 @@ def test_summarize_v3_aggregates_claim_classification_tool_and_agent_metrics() -
     assert summary["agent"]["invalid_tool_calls"] == 1
     assert summary["agent"]["retries"] == 2
     assert summary["agent"]["timeouts"] == 0
-    assert summary["statistics"]["route_accuracy_95ci"] == [1.0, 1.0]
+    assert summary["statistics"]["route"]["ci95"] is None
+    assert summary["statistics"]["route"]["case_n"] == 1
 
 
 def test_multi_accepted_labels_are_counted_without_inventing_confusion_class() -> None:

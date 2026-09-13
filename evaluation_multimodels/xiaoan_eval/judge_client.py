@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
+from .oracle_judge import contract as oracle_contract, validate as validate_oracle
+from collections.abc import Callable as ABCCallable
 from typing import Any, Callable, Mapping, Protocol
 
 from .judge import JudgeResult, parse_judge_response, validate_claim_evidence
@@ -16,21 +19,37 @@ class JudgeProvider(Protocol):
 class JudgeClient:
     def __init__(self, provider: JudgeProvider | Callable[[Mapping[str, Any]], str],
                  rating_rule: RatingRule, *, judge_id: str | None = None,
-                 provider_id: str | None = None, model: str | None = None) -> None:
+                 provider_id: str | None = None, model: str | None = None,
+                 checkpoint: ABCCallable[[Mapping[str, Any]], None] | None = None,
+                 checkpoint_event: str = "judge") -> None:
         self._provider = provider
         self._rating_rule = rating_rule
         self.judge_id = judge_id or os.getenv("XIAOAN_JUDGE_ID", "judge:configured")
         self.provider_id = provider_id or os.getenv("XIAOAN_JUDGE_PROVIDER", "configured")
         self.model = model or os.getenv("XIAOAN_JUDGE_MODEL", "configured")
+        self._checkpoint = checkpoint
+        self._checkpoint_event = checkpoint_event
 
     def judge(self, request: Mapping[str, Any]) -> JudgeResult:
         """Invoke an injected provider once and validate its untrusted output."""
-        result = parse_judge_response(_invoke(self._provider, request), self._rating_rule)
+        request = {**request, "oracle_contract": oracle_contract(request)}
+        raw = _invoke(self._provider, request)
+        usage = getattr(raw, "usage", {})
+        if self._checkpoint is not None:
+            self._checkpoint({"event": self._checkpoint_event, **{key: request[key] for key in ("case_id", "turn") if key in request}, "raw_response": str(raw), "provider_usage": usage if isinstance(usage, Mapping) else {}, "error": None})
+        try:
+            result = parse_judge_response(raw, self._rating_rule)
+        except Exception as exc:
+            if self._checkpoint is not None:
+                self._checkpoint({"event": f"{self._checkpoint_event}_validation", "status": "ERROR", "error": f"{type(exc).__name__}: {exc}"})
+            raise
+        if self._checkpoint is not None:
+            self._checkpoint({"event": f"{self._checkpoint_event}_validation", "status": "OK", "error": None})
         catalog = request.get("evidence_catalog", [])
         if not isinstance(catalog, list):
             raise TypeError("judge request evidence_catalog must be an array")
         validate_claim_evidence(result, catalog)
-        return result
+        return replace(result, oracle_assessment=validate_oracle(result.oracle_assessment, request))
 
 
 def _invoke(provider: Any, request: Mapping[str, Any]) -> str:

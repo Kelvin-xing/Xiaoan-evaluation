@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from .measurement import retrieval_batch
 from .trace_observations import iter_trace_observations
 
 
@@ -109,7 +110,7 @@ def summarize_rag(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 "reason": "current Chatflow traces do not expose verifiable capsule content units",
             }
         ),
-        "retrieval": {"mrr": None, "ndcg": None, "evaluated_turns": 0},
+        "retrieval": _ranked_measurements(records),
         "route_confusion": route_confusion,
     }
 
@@ -200,3 +201,28 @@ def _attribution(route_id: str, refs: frozenset[str]) -> str:
     if refs:
         return "grounded_baseline"
     return "baseline_no_resolved_refs"
+
+
+def _ranked_measurements(records):
+    rows = []
+    missing = 0
+    for record in records:
+        for observation in record.get("pipeline", {}).get("observations", []):
+            oracle = observation.get("expected", {}).get("retrieval_oracle")
+            if observation.get("oracle_approved") is not True or not isinstance(oracle, dict):
+                continue
+            actual = observation.get("actual", {})
+            versions = actual.get("retrieval_versions")
+            keys = ("corpus_version", "chunk_version", "retriever_version", "reranker_version")
+            matching = isinstance(versions, dict) and all(versions.get(k) == oracle[k] for k in keys)
+            if actual.get("ranked_refs") is None or not matching:
+                missing += 1
+                continue
+            rows.append({**oracle, "ranked_ids": actual["ranked_refs"]})
+    result = retrieval_batch(rows)
+    # Keep legacy flat fields only for a single comparable stratum.
+    metrics = result["strata"][0]["metrics"] if len(result["strata"]) == 1 else {}
+    return {"mrr": metrics.get("reciprocal_rank_at_k", {}).get("mean"),
+            "ndcg": metrics.get("ndcg_at_k", {}).get("mean"),
+            "evaluated_turns": sum(r["status"] == "AVAILABLE" for r in result["queries"]),
+            "missing_trace_turns": missing, "ranked_evaluation": result}

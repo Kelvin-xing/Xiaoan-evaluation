@@ -54,6 +54,7 @@ class ExpectedOutcome:
     wiki_refs: tuple[str, ...] = ()
     capsule_ids: tuple[str, ...] = ()
     response_oracle: ResponseOracle | None = None
+    retrieval_oracle: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -362,6 +363,7 @@ def _parse_turn(raw: Mapping[str, Any]) -> TestTurn:
                 aliases=("capsules", "allowed_capsule_ids", "capsule_oracle"),
             ),
             response_oracle=_parse_response_oracle(expected_raw),
+            retrieval_oracle=_parse_retrieval_oracle(expected_raw),
         )
     return TestTurn(number, user, expected)
 
@@ -607,3 +609,19 @@ def _optional_string(value: Any) -> str | None:
 
 def _case_id_from_path(source: Path) -> str:
     return source.stem if _CASE_ID.fullmatch(source.stem) else source.name
+
+
+def _parse_retrieval_oracle(raw: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    value = raw.get("retrieval_oracle")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise CaseValidationError("retrieval_oracle must be an object")
+    from .measurement import retrieval
+    try:
+        result = retrieval({**value, "ranked_ids": [], "status": "AVAILABLE"})
+    except (ValueError, TypeError, KeyError) as exc:
+        raise CaseValidationError(f"invalid retrieval_oracle: {exc}") from exc
+    if result["status"] != "AVAILABLE":
+        raise CaseValidationError("retrieval_oracle requires complete qrels and version metadata")
+    return dict(value)

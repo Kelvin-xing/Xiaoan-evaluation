@@ -10,6 +10,7 @@ from pathlib import Path
 import threading
 from typing import Mapping, Sequence
 
+from .measurement_cli import register as register_measurements, run as run_measurement
 from .auto_experiment import run_auto_experiment, run_auto_file_experiment
 from .attribution_client import AttributionClient
 from .baseline import compare_baseline, compare_workbook_baseline
@@ -49,6 +50,8 @@ PREFLIGHT_ARTIFACTS = {
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.command == "measure":
+        return run_measurement(args)
     if args.command == "preflight":
         return _preflight(args)
     if args.command == "report":
@@ -76,6 +79,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="xiaoan-eval")
     commands = parser.add_subparsers(dest="command", required=True)
+    register_measurements(commands)
     preflight = commands.add_parser("preflight", help="validate cases without running the SUT")
     preflight.add_argument("cases")
     preflight.add_argument("--rating-rule", default="ratings rule.yml")

@@ -1,6 +1,9 @@
 """Deterministic helpers for XiaoAn v3 claim and judge calibration metrics."""
 from __future__ import annotations
 
+from .oracle_judge import summarize as summarize_oracles
+from .measurement import cluster_interval
+
 from dataclasses import dataclass
 from collections import Counter
 import random
@@ -298,18 +301,9 @@ def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "judge_calibration": judge_calibration(records),
         "human_calibration": _human_calibration(records),
         "semantic_attribution": semantic_attribution_metrics(semantic_turns),
-        "statistics": {
-            "route_accuracy_95ci": _bootstrap_ci(
-                route_accepted
-            ),
-            "safety_accuracy_95ci": _bootstrap_ci(
-                safety_accepted
-            ),
-            "goal_completion_95ci": _bootstrap_ci(goals),
-            "method": "seeded percentile bootstrap",
-            "bootstrap_samples": 1000,
-            "seed": 0,
-        },
+        "semantic_oracle": summarize_oracles([o.get("judge", {}).get("oracle_assessment") for o in _observations(records) if o.get("expected", {}).get("response_oracle")]),
+        "legacy_claim_matching": "DEPRECATED_LITERAL_MATCH_NOT_TASK_CORRECTNESS",
+        "statistics": _case_statistics(records),
     }
 
 
@@ -324,7 +318,7 @@ def _observations(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any
             if not isinstance(observation, Mapping) or observation.get("oracle_approved") is not True:
                 continue
             if isinstance(observation.get("expected"), Mapping) and isinstance(observation.get("actual"), Mapping):
-                rows.append(observation)
+                rows.append({**observation, "case_id": record.get("case_id", record.get("id"))})
     return rows
 
 
@@ -515,7 +509,7 @@ def render_v3_markdown(summary: Mapping[str, Any]) -> str:
     lines += ["", "## Judge calibration", "", "| Metric | Value |", "| --- | ---: |"]
     for key, value in calibration.items():
         lines.append(f"| {key} | {value if value is not None else 'n/a'} |")
-    for section in ("answer", "citations", "semantic_attribution", "route", "safety", "refusal", "tools", "agent", "statistics", "human_calibration"):
+    for section in ("semantic_oracle", "answer", "citations", "semantic_attribution", "route", "safety", "refusal", "tools", "agent", "statistics", "human_calibration"):
         values = summary.get(section, {})
         if not isinstance(values, Mapping):
             continue
@@ -543,3 +537,24 @@ def _mean_dimension_score(value: Any) -> float | None:
     scores = [float(item["score"]) for item in value if isinstance(item, Mapping)
               and isinstance(item.get("score"), (int, float)) and not isinstance(item.get("score"), bool)]
     return sum(scores) / len(scores) if scores else None
+
+
+def _case_statistics(records):
+    result = {}
+    for name, expected_key, actual_key in (("route", "route_ids", "route_id"), ("safety", "safety_levels", "safety_level")):
+        rows = []
+        missing_case = 0
+        for o in _observations(records):
+            accepted = o["expected"].get(expected_key)
+            if not accepted:
+                continue
+            if not o.get("case_id"):
+                missing_case += 1
+                continue
+            actual = o["actual"].get(actual_key)
+            rows.append({"case_id": o["case_id"], "unit_id": str(o["turn"]),
+                         "value": float(actual in accepted) if actual is not None else None})
+        result[name] = cluster_interval(rows)
+        result[name]["missing_case_id_n"] = missing_case
+    result["method"] = "case-macro cluster bootstrap; one case has no confidence interval"
+    return result

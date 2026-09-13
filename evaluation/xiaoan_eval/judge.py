@@ -47,6 +47,7 @@ class JudgeResult:
     dimensions: tuple[DimensionJudgement, ...]
     legal_claims: tuple[ClaimJudgement, ...] = ()
     faithfulness_claims: tuple[ClaimJudgement, ...] = ()
+    oracle_assessment: Mapping[str, Any] | None = None
 
 
 def validate_claim_evidence(
@@ -114,6 +115,7 @@ def parse_judge_response(raw_json: str, rating_rule: RatingRule) -> JudgeResult:
         )
 
     return JudgeResult(
+        oracle_assessment=root.get("oracle_assessment"),
         red_lines=red_lines,
         dimensions=dimensions,
         legal_claims=tuple(
