@@ -96,7 +96,7 @@ def multimodel_transport(spec: Any, prompt: str) -> Mapping[str, Any]:
     envelope: Mapping[str, Any] = {}
     try:
         parsed = json.loads(prompt)
-        if isinstance(parsed, Mapping) and parsed.get("xiaoan_prompt_contract") == "matrix-judge-prompt/v1":
+        if isinstance(parsed, Mapping) and parsed.get("xiaoan_prompt_contract") in {"matrix-judge-prompt/v1", "matrix-judge-prompt/v2"}:
             envelope = parsed
     except json.JSONDecodeError:
         pass
@@ -143,6 +143,9 @@ def multimodel_transport(spec: Any, prompt: str) -> Mapping[str, Any]:
                 "dimensions": {"type": "object", "additionalProperties": False, "required": names, "properties": {name: {"type": "integer", "enum": [0, 1, 2, 3]} for name in names}},
             },
         }
+        if envelope.get("xiaoan_prompt_contract") == "matrix-judge-prompt/v2":
+            schema["required"].append("oracle_assessment")
+            schema["properties"]["oracle_assessment"] = oracle_response_schema()
         if use_anthropic and os.getenv("XIAOAN_CLAUDE_STRUCTURED_OUTPUT_MODE", "tool").strip().lower() != "off":
             body["tools"] = [{"name": "submit_judgement", "description": "Submit the complete XiaoAn matrix judgement.", "input_schema": schema}]
             body["tool_choice"] = {"type": "tool", "name": "submit_judgement"}
