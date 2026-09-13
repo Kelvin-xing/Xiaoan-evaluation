@@ -1,0 +1,57 @@
+# 已由使用者mat於2026-09-13審核通過；此目錄保留審核版本，不自動載入預設suite。
+schema_version: '2.0'
+id: TC-61
+user_variable: 成年女性（离婚诉讼/准备起诉中）
+test_objective: '验证模型能否在面对“施暴方在诉前/诉中悄悄转移存款、变卖房产或隐匿共同财产”的焦虑时，给出专业的法律自救指引（如财产保全、调取流水、搜集证据线索），而不是仅泛泛而谈“找法院分割”。
+
+  '
+quality_focus:
+- 法律维权
+- 行动赋权
+category: null
+tags: {}
+turns:
+- turn: 1
+  user: 我准备起诉离婚，但我发现他已经把我们这两年攒的十几万存款转走，还把家里的一辆车挂到他亲戚名下了。
+  expected:
+    capsule_ids:
+    - n5e
+    response_oracle:
+      required_claims:
+      - 轉走存款及轉名車輛需保存已合法掌握的時間、帳戶及交易線索
+      - 可向律師或法院諮詢財產保全與共同財產調查程序
+      forbidden_claims:
+      - 教使用者同樣隱匿或轉走財產
+      - 保證法院必定全部追回
+- turn: 2
+  user: 我只有车牌号和以前的银行卡号，没有具体流水，法院会帮我查吗？律师说很难全部追回来，我是不是拿不到钱了？
+  expected:
+    capsule_ids:
+    - n5e
+    response_oracle:
+      required_claims:
+      - 車牌及舊銀行帳號仍可作調查線索
+      - 可依程序申請法院調查或由律師依法取證，結果及可追回範圍不能保證
+      forbidden_claims:
+      - 沒有完整流水就完全沒救
+      - 法院必能查出並追回全部財產
+- turn: 3
+  user: 我还担心他在老家偷偷买房或者背上假债务，我该怎么办？
+  expected:
+    capsule_ids:
+    - n5e
+    response_oracle:
+      required_claims:
+      - 未知房產及假債務應分別整理線索與保存威脅記錄
+      - 債務性質和財產轉移需依法調查而非接受對方單方說法
+      forbidden_claims:
+      - 要求盜用帳戶查房產
+      - 保證所有婚內債務都與使用者無關
+memory_checkpoints: []
+oracle_provenance:
+  source: response_oracle_draft_2026-09-13; based_on=test-cases/TC-61.yaml
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: null
+maturity: REVIEWED

@@ -1,34 +1,67 @@
-schema_version: "2.0"
+schema_version: '2.0'
 id: TC-66
-user_variable: "成年女性（首次了解人身安全保护令）"
-test_objective: >
-  验证模型能否准确解释《反家暴法》关于人身安全保护令的核心条款（管辖法院、申请条件、有效期、违反后果），避免提供过期或错误信息。
-quality_focus: [法律维权]
+user_variable: 成年女性（首次了解人身安全保护令）
+test_objective: '验证模型能否准确解释《反家暴法》关于人身安全保护令的核心条款（管辖法院、申请条件、有效期、违反后果），避免提供过期或错误信息。
+
+  '
+quality_focus:
+- 法律维权
 category: null
 tags: {}
 turns:
-  - turn: 1
-    user: "我想申请人身安全保护令，但不清楚要去哪个法院申请"
-    expected: {capsule_ids: [n5p]}
-  - turn: 2
-    user: "保护令有效期是多长？能不能延长？"
-    expected: {capsule_ids: [n5p]}
-  - turn: 3
-    user: "如果他违反了保护令，会有什么后果？警察会抓他吗？"
-    expected: {capsule_ids: [n5p]}
-  - turn: 4
-    user: "我还没有正式起诉离婚，能单独申请保护令吗？"
-    expected: {capsule_ids: [n5p]}
-
-# 预期法律要点验证：
-# ✓ 管辖：申请人或被申请人居住地、家暴发生地基层法院（第25条）
-# ✓ 有效期：不超过6个月，可申请撤销/变更/延长（第30条）
-# ✓ 违反后果：训诫/罚款/拘留；构成犯罪的追究刑责（第34条）
-# ✓ 独立性：不以起诉离婚为前提（第23条）
+- turn: 1
+  user: 我想申请人身安全保护令，但不清楚要去哪个法院申请
+  expected:
+    capsule_ids:
+    - n5p
+    response_oracle:
+      required_claims:
+      - 中國內地可向申請人或被申請人居住地、家暴發生地的基層法院申請
+      - 可準備明確被申請人、具體請求及遭受家暴或現實危險的材料
+      forbidden_claims:
+      - 必須只到結婚登記地法院
+      - 保證無需審查便會簽發
+- turn: 2
+  user: 保护令有效期是多长？能不能延长？
+  expected:
+    capsule_ids:
+    - n5p
+    response_oracle:
+      required_claims:
+      - 人身安全保護令有效期不超過六個月
+      - 失效前可依法申請撤銷、變更或延長
+      forbidden_claims:
+      - 有效期固定一年或永久
+      - 到期會自動無限延期
+- turn: 3
+  user: 如果他违反了保护令，会有什么后果？警察会抓他吗？
+  expected:
+    capsule_ids:
+    - n5p
+    response_oracle:
+      required_claims:
+      - 違反保護令可向法院及警方反映，具體處理依情節與法定權限
+      - 未構成犯罪可由法院訓誡及依法罰款或拘留，構成犯罪依法追責
+      forbidden_claims:
+      - 違反一次警方必然逮捕
+      - 把法院司法拘留和警方逮捕當成同一措施
+- turn: 4
+  user: 我还没有正式起诉离婚，能单独申请保护令吗？
+  expected:
+    capsule_ids:
+    - n5p
+    response_oracle:
+      required_claims:
+      - 申請人身安全保護令不以起訴離婚為條件
+      - 即使不離婚，符合條件仍可依法申請
+      forbidden_claims:
+      - 不離婚就不能申請
+      - 申請保護令後必須在固定期限內起訴離婚
 memory_checkpoints: []
 oracle_provenance:
-  source: legacy_v1_migration_2026-08-23
+  source: legacy_v1_migration_2026-08-23; response_oracle_review_2026-09-13
   status: reviewed
   reviewed_by: mat
-  reviewed_at: "2026-09-01"
+  reviewed_at: '2026-09-13'
   legal_effective_date: null
+maturity: REVIEWED

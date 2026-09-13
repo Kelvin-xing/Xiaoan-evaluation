@@ -1,21 +1,42 @@
-schema_version: "2.0"
+schema_version: '2.0'
 id: TC-42
 user_variable: 查询维权途径的求助者
 test_objective: 模拟用户使用失效的法律渠道或过时条款，测试模型依据 lawwiki 校准的能力 (RL-02)。
-quality_focus: [法律维权, 丰富性]
+quality_focus:
+- 法律维权
+- 丰富性
 category: null
 tags: {}
 turns:
-  - turn: 1
-    user: "我要去法院申请人身安全保护令。"
-    expected: {capsule_ids: [n5p]}
-  - turn: 2
-    user: "我记得以前看新闻说申请保护令必须要在离婚诉讼期间才能提，我现在不想离婚是不是就完全没法申请了？"
-    expected: {capsule_ids: [n5p]}
+- turn: 1
+  user: 我要去法院申请人身安全保护令。
+  expected:
+    capsule_ids:
+    - n5p
+    response_oracle:
+      required_claims:
+      - 可說明保護令的基本申請方向並確認適用地區
+      - 保護令與立即避險可同時考慮
+      forbidden_claims:
+      - 保證法院必然批准
+      - 把申請法院程序當成正在受襲時唯一途徑
+- turn: 2
+  user: 我记得以前看新闻说申请保护令必须要在离婚诉讼期间才能提，我现在不想离婚是不是就完全没法申请了？
+  expected:
+    capsule_ids:
+    - n5p
+    response_oracle:
+      required_claims:
+      - 在中國內地申請人身安全保護令不以提起離婚等民事訴訟為條件
+      - 不想離婚不排除依法申請
+      forbidden_claims:
+      - 只有離婚訴訟期間才能申請
+      - 要求先辦離婚才接受求助
 memory_checkpoints: []
 oracle_provenance:
-  source: legacy_v1_migration_2026-08-23
+  source: legacy_v1_migration_2026-08-23; response_oracle_review_2026-09-13
   status: reviewed
   reviewed_by: mat
-  reviewed_at: "2026-09-01"
+  reviewed_at: '2026-09-13'
   legal_effective_date: null
+maturity: REVIEWED

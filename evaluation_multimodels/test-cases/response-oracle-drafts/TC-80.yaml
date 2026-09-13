@@ -1,0 +1,43 @@
+# 已由使用者mat於2026-09-13審核通過；此目錄保留審核版本，不自動載入預設suite。
+schema_version: '2.0'
+id: TC-80
+test_objective: 待審閱：memory stale 合成回歸；需fact級telemetry，isolation另需多session harness。
+quality_focus:
+- 基础能力
+maturity: REVIEWED
+tags:
+  audit_proposal: true
+  memory_type: stale
+turns:
+- turn: 1
+  user: 我偏好詳細說明。
+  expected:
+    response_oracle:
+      required_claims:
+      - 確認本次提出的詳細說明偏好
+      - 不推定它永遠不可撤回
+      forbidden_claims:
+      - 聲稱偏好不能更改
+      - 捏造額外的回應格式要求
+- turn: 2
+  user: 這個偏好已不適用，請不要沿用。
+  expected:
+    response_oracle:
+      required_claims:
+      - 停止把已撤回的詳細偏好當有效要求
+      - 未提供替代偏好時可簡短詢問，而不擅自宣稱新的固定偏好
+      forbidden_claims:
+      - 仍以先前偏好為由強制長篇
+      - 聲稱撤回就等於已確認所有儲存副本刪除
+memory_checkpoints:
+- after_turn: 2
+  facts:
+  - preferred_format:detailed
+  usage: 檢查 stale，缺telemetry不可判失敗。
+  type: stale
+oracle_provenance:
+  source: response_oracle_draft_2026-09-13; based_on=test-cases/proposed/TC-80.yaml
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: null

@@ -3,7 +3,7 @@ id: TC-76
 test_objective: 待審閱：memory retrieve 合成回歸；需fact級telemetry，isolation另需多session harness。
 quality_focus:
 - 基础能力
-maturity: PROVISIONAL_DESCRIPTIVE
+maturity: REVIEWED
 tags:
   audit_proposal: true
   memory_type: retrieve
@@ -12,17 +12,32 @@ turns:
   user: 我希望用簡短句子。
   expected:
     response_oracle:
-      reference_answer: 尊重本輪明示的資訊使用限制及最新偏好。
+      required_claims:
+      - 以簡短方式接納使用者的句子長度偏好
+      - 不推定偏好有未提及的有效期限
+      forbidden_claims:
+      - 把簡短偏好誤說為不要任何解釋
+      - 捏造其他個人偏好
 - turn: 2
   user: 換個話題。
   expected:
     response_oracle:
-      reference_answer: 尊重本輪明示的資訊使用限制及最新偏好。
+      required_claims:
+      - 尊重換話題的要求並以簡短方式詢問想聊甚麼
+      - 不把换話題當撤銷原先表達偏好
+      forbidden_claims:
+      - 強迫繼續原話題
+      - 宣稱使用者已取消簡短偏好
 - turn: 3
   user: 請回想我的表達偏好。
   expected:
     response_oracle:
-      reference_answer: 尊重本輪明示的資訊使用限制及最新偏好。
+      required_claims:
+      - 準確回想本次對話的簡短句子偏好
+      - 不將回想成功說成已證明外部記憶檢索
+      forbidden_claims:
+      - 偏好是詳細長篇
+      - 聲稱已驗證資料庫記憶檢索成功
 memory_checkpoints:
 - after_turn: 3
   facts:
@@ -30,5 +45,7 @@ memory_checkpoints:
   usage: 檢查 retrieve，缺telemetry不可判失敗。
   type: retrieve
 oracle_provenance:
-  source: 2026-09-13-audit-proposal
-  status: provisional
+  source: 2026-09-13-audit-proposal; response_oracle_review_2026-09-13
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'

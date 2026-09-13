@@ -143,13 +143,24 @@ def test_human_review_preserves_dynamic_weights_and_recomputes_verdict(tmp_path,
     assert read_workbook(final).cases[0]["quality_verdict"] == verdict
 
 
-def test_proposed_cases_have_authored_but_no_reviewed_coverage():
+def test_reviewed_proposals_have_coverage_without_aggregate_admission():
+    from dataclasses import replace
     from xiaoan_eval.cases import load_cases
     from xiaoan_eval.coverage import case_coverage, coverage_rows
     loaded = load_cases("test-cases/proposed", RULE)
     assert len(loaded) == 9
-    assert all(item.case is not None and not item.case.oracle_gate_eligible for item in loaded)
-    rows = coverage_rows([case_coverage(item.case) for item in loaded])
+    cases = [item.case for item in loaded]
+    assert all(case is not None and case.oracle_gate_eligible and not case.aggregate_eligible for case in cases)
+    rows = {row["metric"]: row for row in coverage_rows([case_coverage(case) for case in cases])}
+    assert rows["Oracle response"]["value"] == 20
+    assert rows["Oracle memory:isolation"]["value"] == 1
+    assert rows["Oracle goal"]["value"] == rows["Oracle tools"]["value"] == 0
+    # Preserve the original provisional-contract regression independently of
+    # the user's subsequent approval of the checked-in proposal content.
+    provisional = [replace(case, maturity="PROVISIONAL_DESCRIPTIVE",
+        oracle_provenance=replace(case.oracle_provenance, status="provisional",
+                                  reviewed_by=None, reviewed_at=None)) for case in cases]
+    rows = coverage_rows([case_coverage(case) for case in provisional])
     assert all(row["value"] == 0 for row in rows)
     assert any("Authored=1;" in row["interpretation"] for row in rows if row["metric"] == "Oracle memory:isolation")
 

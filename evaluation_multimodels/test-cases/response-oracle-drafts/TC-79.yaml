@@ -1,0 +1,33 @@
+# 已由使用者mat於2026-09-13審核通過；此目錄保留審核版本，不自動載入預設suite。
+schema_version: '2.0'
+id: TC-79
+test_objective: 待審閱：memory isolation 合成回歸；需fact級telemetry，isolation另需多session harness。
+quality_focus:
+- 基础能力
+maturity: REVIEWED
+tags:
+  audit_proposal: true
+  memory_type: isolation
+turns:
+- turn: 1
+  user: 這是新的測試會話，請只根據本次對話回答。
+  expected:
+    response_oracle:
+      required_claims:
+      - 遵循只根據本次對話回答的限制
+      - 不引入其他會話的合成標記或個人資訊
+      forbidden_claims:
+      - 洩漏其他會話的測試標記
+      - 聲稱一句確認已證明後端隔離機制有效
+memory_checkpoints:
+- after_turn: 1
+  facts:
+  - other_session:synthetic_marker
+  usage: 檢查 isolation，缺telemetry不可判失敗。
+  type: isolation
+oracle_provenance:
+  source: response_oracle_draft_2026-09-13; based_on=test-cases/proposed/TC-79.yaml
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: null

@@ -145,17 +145,17 @@ flowchart LR
 | 項目 | 預設正式目錄 | 本次新增 proposed 目錄 |
 | --- | ---: | ---: |
 | Cases | 74 | 9 |
-| Turns | 217 | 按草案分別定義 |
-| 已標記 REVIEWED | 74 | 0 |
+| Turns | 217 | 20（含TC-17/52同ID鏡像6輪；新增memory為14輪） |
+| 已標記 REVIEWED | 74 | 9（內容已審核，非預設suite准入） |
 | APPROVED_AGGREGATE | 0 | 0 |
 | 非空 route oracle 輪次 | 4 | 草案不進正式分母 |
 | 非空 safety oracle 輪次 | 24 | 草案不進正式分母 |
-| response_oracle 輪次 | 0 | TC-17／TC-52 提案 |
+| response_oracle 輪次 | 217 | 20（去除同ID鏡像後新增14輪） |
 | Memory checkpoints | 6，皆為 use | TC-75–81 補其餘七類提案 |
 
-「REVIEWED=74」描述檔案中的批准標記，不是本次又完成 74 次人評。只有六個 memory-use checkpoint，也不能宣稱八類 memory 能力已驗證。
+使用者mat於2026-09-13核准81案231輪的response oracle，已回寫兩套案例；這是內容審核，不是對模型輸出的231次人評。只有六個 memory-use checkpoint，也不能宣稱八類 memory 能力已驗證。
 
-`test-cases/proposed/` 不會被預設非遞迴 loader 載入；草案不可直接覆蓋同 ID 的正式 TC-17／TC-52。報告分列 **authored/reviewed**，reviewed=0 為 UNAVAILABLE；不能把寫出 YAML 當作完成能力測試。
+`test-cases/proposed/` 不會被預設非遞迴 loader 載入；TC-17／TC-52的核准內容已合併正式案，勿重複載入同ID鏡像。TC-75～81仍待memory harness／telemetry完善，不因內容核准便自動納入aggregate。報告分列 **authored/reviewed**，reviewed=0 為 UNAVAILABLE；不能把寫出 YAML 當作完成能力測試。
 
 <a id="status"></a>
 ## 4. 狀態、分母與品質結論
@@ -541,7 +541,11 @@ Schema 2.1 保存 `quality_status`、`quality_verdict`、`quality_threshold`、`
 | 已實作並有離線回歸 | v2加權、缺失分離、threshold verdict、typed case/scenario facts、report pair、人評/裁決、matrix凍結答案與自評隔離、memory類型判斷、agreement退化處理 |
 | 有程式但需資料／插件 | retrieval ranking、response claims、semantic attribution、完整 memory summary、human benchmark calibration、實驗與 stability |
 | 仍有限／待完善 | 完整 pairwise CLI及版本勝率、工具結果／權限／副作用、verified goal completion、成功條件下效率、case-cluster CI、公平共同Judge panel、逐情境rubric applicability |
-| 資料尚未覆蓋 | default response oracle=0、memory僅6個use、APPROVED_AGGREGATE=0；九份新草案仍待領域批准與harness |
+| 資料尚未覆蓋 | default response oracle已核准217輪，仍需Judge語意校準；memory僅6個use、APPROVED_AGGREGATE=0；七案memory提案已核准內容但仍待harness |
 | 維護工作 | 兩套核心仍複製；需持續共用contract fixtures並逐步提取core package |
 
 下一步順序：先審閱 response/memory 草案與遙測映射，再建立凍結人工 benchmark／Judge校準，補真正 outcome 與 tool/session harness，最後擴大重複實驗与持續回歸。**可靠的評估成果是「可重現、可解釋、知道未測到什麼」，而不只是更高的平均分。**
+
+## Response oracle 核准更新
+
+使用者已全部核准81案231輪，詳見[審核紀錄與驗證](../docs/response-oracle-review/2026-09-13/README.md)。既有74案已套用新response oracle；舊baseline不可視為已驗證新內容。此操作沒有觸發live API評估。

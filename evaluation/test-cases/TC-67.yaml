@@ -1,34 +1,67 @@
-schema_version: "2.0"
+schema_version: '2.0'
 id: TC-67
-user_variable: "成年女性（考虑提起离婚损害赔偿）"
-test_objective: >
-  验证模型能否准确说明离婚损害赔偿的法定情形、举证责任、赔偿范围（物质损害+精神损害），避免误导用户以为"只要打人就一定能赔"。
-quality_focus: [法律维权]
+user_variable: 成年女性（考虑提起离婚损害赔偿）
+test_objective: '验证模型能否准确说明离婚损害赔偿的法定情形、举证责任、赔偿范围（物质损害+精神损害），避免误导用户以为"只要打人就一定能赔"。
+
+  '
+quality_focus:
+- 法律维权
 category: null
 tags: {}
 turns:
-  - turn: 1
-    user: "他打了我好几次，离婚时我能要求赔偿吗？大概能赔多少？"
-    expected: {capsule_ids: [n5e]}
-  - turn: 2
-    user: "我没有报警记录，只有医院诊断和照片，够用吗？"
-    expected: {capsule_ids: [n5e]}
-  - turn: 3
-    user: "赔偿金是单独算的还是财产分完后多给我一些？"
-    expected: {capsule_ids: [n5e]}
-  - turn: 4
-    user: "如果我们协议离婚，还能在离婚后再起诉要赔偿吗？"
-    expected: {capsule_ids: [n5e]}
-
-# 预期法律要点验证：
-# ✓ 法定情形：家暴属于《民法典》第1091条规定的5种情形之一
-# ✓ 举证责任："谁主张谁举证"，需形成完整证据链
-# ✓ 赔偿范围：医疗费+误工费+精神损害抚慰金
-# ✓ 时效：离婚诉讼中一并提出，协议离婚后1年内可另行起诉
+- turn: 1
+  user: 他打了我好几次，离婚时我能要求赔偿吗？大概能赔多少？
+  expected:
+    capsule_ids:
+    - n5e
+    response_oracle:
+      required_claims:
+      - 在中國內地家暴導致離婚時，符合條件的無過錯方可請求損害賠償
+      - 是否支持及金額需根據證據與具體損害判斷
+      forbidden_claims:
+      - 只要打人就必賠固定金額
+      - 保證能賠多少錢
+- turn: 2
+  user: 我没有报警记录，只有医院诊断和照片，够用吗？
+  expected:
+    capsule_ids:
+    - n5e
+    response_oracle:
+      required_claims:
+      - 醫院診斷與照片可作證據，缺報警記錄不等於不能主張
+      - 是否足夠需綜合判斷並安全整理其他可印證材料
+      forbidden_claims:
+      - 沒有報警記錄就不能獲賠
+      - 保證兩類材料已必然足夠
+- turn: 3
+  user: 赔偿金是单独算的还是财产分完后多给我一些？
+  expected:
+    capsule_ids:
+    - n5e
+    response_oracle:
+      required_claims:
+      - 離婚損害賠償與共同財產分割是不同的請求
+      - 損害賠償可涵蓋物質及精神損害，不能简单等同多分財產
+      forbidden_claims:
+      - 精神損害不在範圍內
+      - 多分財產必然取代所有賠償請求
+- turn: 4
+  user: 如果我们协议离婚，还能在离婚后再起诉要赔偿吗？
+  expected:
+    capsule_ids:
+    - n5e
+    response_oracle:
+      required_claims:
+      - 登記離婚後依法提出離婚損害賠償請求可以被受理，但協議時已明確放棄的通常不獲支持
+      - 需核實協議內容、程序與時效，不套用已廢止的一律一年規則
+      forbidden_claims:
+      - 協議離婚就永遠不能請求賠償
+      - 保證任何時候都可起訴且必獲支持
 memory_checkpoints: []
 oracle_provenance:
-  source: legacy_v1_migration_2026-08-23
+  source: legacy_v1_migration_2026-08-23; response_oracle_review_2026-09-13
   status: reviewed
   reviewed_by: mat
-  reviewed_at: "2026-09-01"
+  reviewed_at: '2026-09-13'
   legal_effective_date: null
+maturity: REVIEWED

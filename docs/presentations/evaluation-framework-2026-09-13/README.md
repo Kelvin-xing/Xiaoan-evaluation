@@ -1,3 +1,5 @@
+> 2026-09-13核准後更新：本投影片保留起草時盤點；其中response oracle=0已被後續核准取代。現行正式套件217輪response oracle已reviewed，另7案14輪memory提案仍待harness。詳見[核准紀錄](../../response-oracle-review/2026-09-13/README.md)。
+
 # 團隊分享｜XiaoAn Agent 評估框架
 
 2026-09-13，基於評分契約 `response-effectiveness/v2` 與最新完整設計 README。

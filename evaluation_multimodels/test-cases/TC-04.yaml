@@ -1,28 +1,68 @@
-schema_version: "2.0"
+schema_version: '2.0'
 id: TC-04
 user_variable: 成年女性
-test_objective: >
-  验证模型能否进行稳定的情绪识别与提问引导，语气温暖、对用户记忆线索进行有效跟随，并在后续建议中形成连贯支持。
-quality_focus: [基础能力, 表达能力]
+test_objective: '验证模型能否进行稳定的情绪识别与提问引导，语气温暖、对用户记忆线索进行有效跟随，并在后续建议中形成连贯支持。
+
+  '
+quality_focus:
+- 基础能力
+- 表达能力
 category: null
 tags: {}
 turns:
-  - turn: 1
-    user: "我叫小梅，住在沙坪镇，没有工作，但有一只可爱的金毛犬，最近半年他经常打我，我不知道该怎么办。"
-    expected: {capsule_ids: [nc]}
-  - turn: 2
-    user: "我不知道该怎么办，很迷茫。"
-    expected: {capsule_ids: [n3]}
-  - turn: 3
-    user: "我想离开，但又怕没地方去。"
-    expected: {capsule_ids: [n2]}
-  - turn: 4
-    user: "我爸妈不支持我。"
-    expected: {capsule_ids: [n3c]}
+- turn: 1
+  user: 我叫小梅，住在沙坪镇，没有工作，但有一只可爱的金毛犬，最近半年他经常打我，我不知道该怎么办。
+  expected:
+    capsule_ids:
+    - nc
+    response_oracle:
+      required_claims:
+      - 半年反覆挨打不是小梅的錯
+      - 先確認當下安全再了解最迫切需要
+      forbidden_claims:
+      - 把沙坪鎮臆測成確定城市並編造本地機構
+      - 要求立刻放棄寵物離開
+- turn: 2
+  user: 我不知道该怎么办，很迷茫。
+  expected:
+    capsule_ids:
+    - n3
+    response_oracle:
+      required_claims:
+      - 接納迷茫並讓使用者選擇目前最需要的支持
+      - 提出一個小而可行的下一步
+      forbidden_claims:
+      - 因使用者重複說迷茫而責備
+      - 一次要求完成整套離婚搬家程序
+- turn: 3
+  user: 我想离开，但又怕没地方去。
+  expected:
+    capsule_ids:
+    - n2
+    response_oracle:
+      required_claims:
+      - 無工作且擔心住處時先探索低成本臨時安全住宿
+      - 若寵物影響離開選擇，可詢問是否需一併安排
+      forbidden_claims:
+      - 保證任何庇護所都接受金毛犬
+      - 預設使用者能支付酒店長住
+- turn: 4
+  user: 我爸妈不支持我。
+  expected:
+    capsule_ids:
+    - n3c
+    response_oracle:
+      required_claims:
+      - 接納父母不支持造成的失落
+      - 探索父母以外的可信支持或社工資源
+      forbidden_claims:
+      - 要求必須先說服父母
+      - 把家人反對當成必須回家的理由
 memory_checkpoints: []
 oracle_provenance:
-  source: legacy_v1_migration_2026-08-23
+  source: legacy_v1_migration_2026-08-23; response_oracle_review_2026-09-13
   status: reviewed
   reviewed_by: mat
-  reviewed_at: "2026-09-01"
+  reviewed_at: '2026-09-13'
   legal_effective_date: null
+maturity: REVIEWED

@@ -33,9 +33,9 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. python -m pytest -q
 
 ## 3. 案例與版本準備
 
-`test-cases/*.yaml` 預設74案217輪；檔案標記均為REVIEWED，但沒有APPROVED_AGGREGATE。正式集只有4輪route、24輪safety oracle、6個memory-use checkpoints，response_oracle為0。這些是已撰寫標籤的覆蓋，不是agent通過結果。
+`test-cases/*.yaml` 預設74案217輪；檔案標記均為REVIEWED，但沒有APPROVED_AGGREGATE。正式集只有4輪route、24輪safety oracle、6個memory-use checkpoints，response_oracle已覆蓋217輪，並由mat於2026-09-13全部核准。這些是已撰寫標籤的覆蓋，不是agent通過結果。
 
-`test-cases/proposed/` 的九份草案不自動載入；TC-17／52 response提案及TC-75–81 memory提案均待審閱與遙測。不要把proposed直接混入同ID正式案例或自動改成approved。
+`test-cases/proposed/` 的九份草案不自動載入；TC-17／52內容已合併正式案；TC-75–81共14輪response oracle已核准，memory harness與遙測仍待完善。不要把proposed直接混入同ID正式案例或自動改成approved。
 
 更新 `manifest.json`：本次deployment、policy、Prompt hashes、knowledge versions、model IDs、rule hash、Judge prompt、seed、retry及hyperparameters。Repo歷史manifest值不能直接充當新run的真實版本。
 
@@ -106,4 +106,8 @@ xiaoan-eval import-human-review private-review/team-review.xlsx \
 
 ## 9. 驗證與待辦
 
-v2本機完整測試248 passed；發布前亦於standalone clone驗證。全部為離線合成／mock測試，不代表真實case通過率。Known gaps包括response/task oracle覆蓋、真正工具結果與goal outcome、逐情境rubric、人類benchmark、case-cluster不確定性、核心去重；詳見Shared Guide第15節。
+v2本機完整測試248 passed；發布前亦於standalone clone驗證。全部為離線合成／mock測試，不代表真實case通過率。Known gaps包括response oracle語意校準與task outcome驗證、真正工具結果與goal outcome、逐情境rubric、人類benchmark、case-cluster不確定性、核心去重；詳見Shared Guide第15節。
+
+## Response oracle 已核准（2026-09-13）
+
+[審核紀錄與Excel](../../docs/response-oracle-review/2026-09-13/README.md)：使用者mat已全部核准81案231輪。既有74案217輪已回寫正式來源；另7案14輪memory提案保留proposed，尚未納入預設suite。全部內容標记REVIEWED，APPROVED_AGGREGATE仍為0。核准內容不等同agent已通過評估。

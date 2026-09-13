@@ -45,7 +45,7 @@ JSON檔是ModelSpec object array；以下是**格式示例**，`YOUR_AVAILABLE_M
 [{"provider":"gpt","model":"YOUR_AVAILABLE_MODEL_ID","tier":"latest","reasoning_effort":"medium"}]
 ```
 
-默認正式cases為74案217輪，REVIEWED不等於APPROVED_AGGREGATE。response oracle=0、memory僅6個use。九份proposed草案不自動載入，不把未批准草案算進正式品質／能力覆蓋。
+默認正式cases為74案217輪，REVIEWED不等於APPROVED_AGGREGATE。response oracle已覆蓋217輪（mat，2026-09-13核准）、memory僅6個use。九份proposed草案不自動載入，不把未批准草案算進正式品質／能力覆蓋。
 
 ## 4. 執行模式
 
@@ -133,4 +133,8 @@ Memory observer支援remember/retrieve/use/not_use/update/isolation/stale/unsafe
 
 ## 10. 驗證與限制
 
-v2本機完整測試292 passed；發布前亦在standalone clone驗證。測試是軟體回歸，不是292次live評測。缺少approved response/task oracle、部分memory遙測、真正工具outcome與公平共同Judge panel時，報告必須顯示限制。完整版本、校準、診斷及下一步見Shared Guide。
+v2本機完整測試292 passed；發布前亦在standalone clone驗證。測試是軟體回歸，不是292次live評測。response oracle已reviewed，仍缺實際task outcome驗證、部分memory遙測、真正工具outcome與公平共同Judge panel時，報告必須顯示限制。完整版本、校準、診斷及下一步見Shared Guide。
+
+## Response oracle 已核准（2026-09-13）
+
+[審核紀錄與Excel](../../docs/response-oracle-review/2026-09-13/README.md)：使用者mat已全部核准81案231輪。既有74案217輪已回寫正式來源；另7案14輪memory提案保留proposed，尚未納入預設suite。全部內容標记REVIEWED，APPROVED_AGGREGATE仍為0。核准內容不等同agent已通過評估。

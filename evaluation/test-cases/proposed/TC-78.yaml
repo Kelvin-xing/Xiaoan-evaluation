@@ -3,7 +3,7 @@ id: TC-78
 test_objective: 待審閱：memory update 合成回歸；需fact級telemetry，isolation另需多session harness。
 quality_focus:
 - 基础能力
-maturity: PROVISIONAL_DESCRIPTIVE
+maturity: REVIEWED
 tags:
   audit_proposal: true
   memory_type: update
@@ -12,12 +12,22 @@ turns:
   user: 我偏好詳細說明。
   expected:
     response_oracle:
-      reference_answer: 尊重本輪明示的資訊使用限制及最新偏好。
+      required_claims:
+      - 接納詳細說明的偏好
+      - 在有實際問題時提供相應解釋而非凭空編造問題
+      forbidden_claims:
+      - 把偏好反記為簡短
+      - 保證已永久同步所有會話
 - turn: 2
   user: 更正：現在請用簡短句子。
   expected:
     response_oracle:
-      reference_answer: 尊重本輪明示的資訊使用限制及最新偏好。
+      required_claims:
+      - 把最新偏好更新為簡短句子
+      - 當輪回應即採簡短表達
+      forbidden_claims:
+      - 继续按詳細說明的舊偏好長篇回覆
+      - 要求使用者不得更改偏好
 memory_checkpoints:
 - after_turn: 2
   facts:
@@ -25,5 +35,7 @@ memory_checkpoints:
   usage: 檢查 update，缺telemetry不可判失敗。
   type: update
 oracle_provenance:
-  source: 2026-09-13-audit-proposal
-  status: provisional
+  source: 2026-09-13-audit-proposal; response_oracle_review_2026-09-13
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
