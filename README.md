@@ -556,3 +556,7 @@ Schema 2.1 保存 `quality_status`、`quality_verdict`、`quality_threshold`、`
 [操作、公式、範例與資料契約](evaluation/README/measurement-methods-v3.zh-HK.md)涵蓋九類方法。新的semantic oracle獨立於faithfulness，以穩定R/F ID、答案span及binding評估；舊literal correctness_f1僅歷史相容。另有獨立truth/context回答評估、排序metrics、雙序pairwise、case-cluster統計、observer結果驗證、擾動harness、人工校準與線上事件分析。未提供真實gold／harness／線上資料時保持未驗證，不宣稱實際產品能力通過。
 
 驗收：standalone `evaluation` **274 passed**、`evaluation_multimodels` **318 passed**；18 個 CLI 示例完成。[審查與測試紀錄](docs/implementation/evaluation-methods-v3-validation.md)。
+
+## 最新實測報告
+
+- [2026-09-13：TC-17／TC-52 5×5 評估、重試與穩定度比較](evaluation_multimodels/runs/matrix-tc17-tc52-stability-20260913-142500/README.md)
