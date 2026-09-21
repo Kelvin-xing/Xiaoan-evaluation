@@ -1,0 +1,375 @@
+schema_version: '2.0'
+id: TC-62
+user_variable: 成年女性（有海外生活或跨国婚姻背景）
+test_objective: '验证模型能否识别曾在境外（如国外报警、就医、申请限制令）遭受家暴的受害者，在回国后起诉离婚或申请人身安全保护令时，境外证据的法律转化与认可问题，避免因“域外证据未经公证认证”导致受害者盲目自信或无所适从。
+
+  '
+quality_focus:
+- 法律维权
+- 求助转介
+category: null
+tags:
+  reference_oracle_revision: case-reference-oracle/v1
+turns:
+- turn: 1
+  user: 我和前夫之前在美国生活，他在那边曾因为家暴我被当地警察逮捕过，我手头有当时国外的警察出警记录和医院报告。
+  expected:
+    capsule_ids: &id001
+    - n2a
+    - baseline
+    response_oracle:
+      required_claims:
+      - 保留境外出警及醫療記錄原件或可靠副本
+      - 先釐清目前是否安全及希望在哪個司法地使用資料
+      forbidden_claims:
+      - 境外材料一律無用
+      - 未確認就斷言已在中國法院具有效力
+    route_ids: *id001
+    preferred_route_id: n2a
+    safety_levels:
+    - normal
+    wiki_refs: []
+    source_refs: []
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: provisional
+      authored_by: codex
+      authored_at: '2026-09-13'
+      snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 既有境外文件但用途不明，先保留并澄清
+      route_contracts:
+        n2a:
+          capsule_ref: content/capsule/N2a 证据留存.md
+          ground_ref: content/capsule/N2a 证据留存.md#ground
+          answer_section_refs:
+          - content/capsule/N2a 证据留存.md#applicability
+          - content/capsule/N2a 证据留存.md#render_policy
+          - content/capsule/N2a 证据留存.md#recognize
+          - content/capsule/N2a 证据留存.md#act
+          configured_ground_node_ids: &id003
+          - domestic-violence-definition
+          - dv-risk-assessment
+          - personal-safety-protection-order
+          - protection-order-evidence
+          - police-dv-handling-workflow
+          - injury-appraisal-procedure
+          - liability-ladder
+          - support-and-legal-aid
+          - public-security-response-duty
+          ground_policy: on_demand
+        baseline:
+          capsule_ref: content/sops/main-agent-baseline-sop.md
+          ground_ref: null
+          answer_section_refs:
+          - content/sops/main-agent-baseline-sop.md
+          configured_ground_node_ids: []
+          ground_policy: not_applicable
+      ground:
+        activation: optional
+        required_node_ids: []
+        background_node_ids:
+        - divorce-and-dv
+        - protection-order-evidence
+        background_source_refs: []
+        reason: 本轮可先支持、澄清或安全规划，不强制讲法律结论；若回答主动加入具体法律主张，仍需独立依据审查。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps:
+      - 当前语料未提供境外证据认证、翻译、跨境适用的完整权威依据。
+      runtime_ground_gaps: {}
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - n2a
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: provisional
+        reviewer: codex
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 既有境外文件但用途不明，先保留并澄清
+        crisis_required: false
+        acceptable_routes: *id001
+        preferred_route: n2a
+        allowed_alternatives:
+        - 可先询问使用地，不需直接提供认证规则
+        review_issue: “前夫”与后轮离婚诉讼矛盾需要保留并核实
+        response_candidate:
+          required_claims:
+          - 保留境外出警及醫療記錄原件或可靠副本
+          - 先釐清目前是否安全及希望在哪個司法地使用資料
+          forbidden_claims:
+          - 境外材料一律無用
+          - 未確認就斷言已在中國法院具有效力
+        response_amendments: []
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required:
+        - 可接受路由边界与preferred
+        - 高风险含义与跨轮解除条件
+        - 必要行为的条件和替代方式
+- turn: 2
+  user: 现在我们回国了，他在国内起诉离婚，说国外的事做不得数。这些英文的报警和就医记录在国内法院有用吗？
+  expected:
+    capsule_ids: &id002
+    - n5e
+    - n2a
+    response_oracle:
+      required_claims:
+      - 英文記錄可能成為證據，應向受理法院核實翻譯及文書形式要求
+      - 適用附加證明書公約的公文書不能一律要求領事雙認證，形式證明也不保證內容被採信
+      forbidden_claims:
+      - 境外證據必須全部辦領事雙認證
+      - 附加證明書保證法院採信所有內容
+    route_ids: *id002
+    preferred_route_id: n5e
+    safety_levels:
+    - normal
+    wiki_refs: []
+    source_refs: []
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: provisional
+      authored_by: codex
+      authored_at: '2026-09-13'
+      snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 中国法院使用境外英文材料，需区分证据能力与形式
+      route_contracts:
+        n5e:
+          capsule_ref: content/capsule/N5e 离婚诉讼求助.md
+          ground_ref: content/capsule/N5e 离婚诉讼求助.md#ground
+          answer_section_refs:
+          - content/capsule/N5e 离婚诉讼求助.md#applicability
+          - content/capsule/N5e 离婚诉讼求助.md#render_policy
+          - content/capsule/N5e 离婚诉讼求助.md#recognize
+          - content/capsule/N5e 离婚诉讼求助.md#act
+          configured_ground_node_ids: &id005
+          - divorce-and-dv
+          ground_policy: on_demand
+        n2a:
+          capsule_ref: content/capsule/N2a 证据留存.md
+          ground_ref: content/capsule/N2a 证据留存.md#ground
+          answer_section_refs:
+          - content/capsule/N2a 证据留存.md#applicability
+          - content/capsule/N2a 证据留存.md#render_policy
+          - content/capsule/N2a 证据留存.md#recognize
+          - content/capsule/N2a 证据留存.md#act
+          configured_ground_node_ids: *id003
+          ground_policy: on_demand
+      ground:
+        activation: unavailable
+        required_node_ids: []
+        background_node_ids:
+        - divorce-and-dv
+        - protection-order-evidence
+        background_source_refs: []
+        reason: 专项权威依据缺失，不能以相关条文充当完整 gold。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps:
+      - 当前语料未提供境外证据认证、翻译、跨境适用的完整权威依据。
+      runtime_ground_gaps: {}
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - n2a
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: provisional
+        reviewer: codex
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 中国法院使用境外英文材料，需区分证据能力与形式
+        crisis_required: false
+        acceptable_routes: *id002
+        preferred_route: n5e
+        allowed_alternatives:
+        - 确认法院翻译及证明要求，不用一律双认证结论
+        review_issue: 附加证明书要求待专项来源核验；不能因少说术语机械扣分
+        response_candidate:
+          required_claims:
+          - 英文記錄可能成為證據，應向受理法院核實翻譯及文書形式要求
+          - 不一律要求领事双认证；说明应按文书种类和适用制度向受理法院核实，形式证明不保证内容采信。
+          forbidden_claims:
+          - 境外證據必須全部辦領事雙認證
+          - 附加證明書保證法院採信所有內容
+        response_amendments:
+        - 不强制逐字提到公约名；具体制度仍需专项来源核验，原历史判断不重写。
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required:
+        - 可接受路由边界与preferred
+        - 高风险含义与跨轮解除条件
+        - 必要行为的条件和替代方式
+        - response_candidate修订
+- turn: 3
+  user: 我还能在国内直接申请人身安全保护令或者要求离婚损害赔偿吗？
+  expected:
+    capsule_ids: &id004
+    - n5e
+    - n5p
+    response_oracle:
+      required_claims:
+      - 在內地可依當下暴力或現實危險評估保護令申請，離婚損害賠償另有要件
+      - 先釐清前夫與正在離婚的矛盾、婚姻狀態及管轄，不能直接套用結論
+      forbidden_claims:
+      - 境外被捕記錄等於內地必判賠償
+      - 不問婚姻狀態就保證可取得離婚賠償
+    route_ids: *id004
+    preferred_route_id: n5e
+    safety_levels:
+    - normal
+    wiki_refs:
+    - content/knowledge/wiki/nodes/personal-safety-protection-order.md
+    - content/knowledge/wiki/nodes/divorce-and-dv.md
+    source_refs:
+    - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第二十三条
+    - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第二十七条
+    - content/knowledge/source/009-民法典婚姻家庭编.md#第一千零九十一条
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: provisional
+      authored_by: codex
+      authored_at: '2026-09-13'
+      snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 同时问保护令和赔偿，且婚姻状态矛盾
+      route_contracts:
+        n5e:
+          capsule_ref: content/capsule/N5e 离婚诉讼求助.md
+          ground_ref: content/capsule/N5e 离婚诉讼求助.md#ground
+          answer_section_refs:
+          - content/capsule/N5e 离婚诉讼求助.md#applicability
+          - content/capsule/N5e 离婚诉讼求助.md#render_policy
+          - content/capsule/N5e 离婚诉讼求助.md#recognize
+          - content/capsule/N5e 离婚诉讼求助.md#act
+          configured_ground_node_ids: *id005
+          ground_policy: on_demand
+        n5p:
+          capsule_ref: content/capsule/N5p 人身安全保护令申请指南.md
+          ground_ref: content/capsule/N5p 人身安全保护令申请指南.md#ground
+          answer_section_refs:
+          - content/capsule/N5p 人身安全保护令申请指南.md#applicability
+          - content/capsule/N5p 人身安全保护令申请指南.md#render_policy
+          - content/capsule/N5p 人身安全保护令申请指南.md#recognize
+          - content/capsule/N5p 人身安全保护令申请指南.md#act
+          configured_ground_node_ids:
+          - personal-safety-protection-order
+          ground_policy: on_demand
+      ground:
+        activation: required
+        required_node_ids:
+        - personal-safety-protection-order
+        - divorce-and-dv
+        background_node_ids: []
+        background_source_refs: []
+        reason: 明确的依据/程序问题，按问题主题选取所需节点；不把 capsule 全部 ground 当作每轮必需。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps: []
+      runtime_ground_gaps:
+        n5e:
+        - personal-safety-protection-order
+        n5p:
+        - divorce-and-dv
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - n5p
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: provisional
+        reviewer: codex
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 同时问保护令和赔偿，且婚姻状态矛盾
+        crisis_required: false
+        acceptable_routes: *id004
+        preferred_route: n5e
+        allowed_alternatives:
+        - 先澄清婚姻状态，分别条件式说明两条路径
+        review_issue: 不能忽略“前夫/正在离婚”；赔偿期限说法需核验
+        response_candidate:
+          required_claims:
+          - 在內地可依當下暴力或現實危險評估保護令申請，離婚損害賠償另有要件
+          - 先釐清前夫與正在離婚的矛盾、婚姻狀態及管轄，不能直接套用結論
+          forbidden_claims:
+          - 境外被捕記錄等於內地必判賠償
+          - 不問婚姻狀態就保證可取得離婚賠償
+        response_amendments: []
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required:
+        - 可接受路由边界与preferred
+        - 高风险含义与跨轮解除条件
+        - 必要行为的条件和替代方式
+memory_checkpoints: []
+oracle_provenance:
+  source: legacy_v1_migration_2026-08-23; response_oracle_review_2026-09-13
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: null
+maturity: REVIEWED
