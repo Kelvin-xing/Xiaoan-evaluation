@@ -35,3 +35,7 @@ Subject trace 未提供 token usage。Judge 的已記錄 tokens 不涵蓋所有�
 依使用者授權，發布這五案的 YAML、模型設定、預檢、完整問題／回答、必要評估結果及報表。排除 `.env`、API keys、私人 checkpoint、完整 debug traces、快取和無關工作目錄變更。`summarize_run.py` 為內部 checkpoint 彙整工具；公開包不含該 checkpoint，因此它不是獨立可重跑的資料來源。模型設定保留供重跑，需另行配置端點及憑證。
 
 補充：GPT Judge 對 Gemini 作答的 TC-05 第 4 輪重試後仍 TIMEOUT，該配對的 case-macro 分數排除不完整 TC-05。發布報表將含 TRIAL_CIRCUIT_OPEN_NOT_ATTEMPTED 的本地跳過紀錄 error_type 由通用分類器誤判的 TIMEOUT 改為 NOT_ATTEMPTED；原始錯誤文字及私人 checkpoint 保留。Claude 回報 input tokens 合計僅 170，數值也應視為供應商原始回報而非可靠帳單依據。
+
+## Qwen／Kimi 重試
+
+重試已完成。Qwen 81 個未完成 Judge 單元及 Kimi 85 個單元仍為 `UNAVAILABLE`；Qwen 原有 4 個有效評分保留。重試未新增有效評分，最新錯誤為端點傳輸／串流 `CONNECTION`，不代表品質零分。
