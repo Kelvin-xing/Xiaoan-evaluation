@@ -1,10 +1,17 @@
 # XiaoAn Evaluation｜評估框架完整設計與使用指南
 
-**設計版本：2026-09-13 · 評分契約 `response-effectiveness/v2` · 一般報告 workbook schema `2.1`**
+**現況版本：2026-09-23 · 評分契約 `response-effectiveness/v2` · Unified measurement `xiaoan-unified/v1`（明確選用）**
 
 這套框架用來回答三件事：**XiaoAn 是否正確完成這次執行、回應是否符合支持任務與安全要求、下一個改動應該在哪裡驗證。** 它同時提供單一 Chatflow 的端到端評估，以及多個 subject／Judge 的交叉評估。分數必須連回案例、oracle、版本及證據，才能用於修改產品。
 
 本 README 是兩套 project 的共同設計基準，涵蓋執行、公式、指標、報告、人工覆核、校準與限制。程式中的 key／enum 保留原拼寫；敘述使用繁體中文。文中的例子均為**合成示例**，不代表真實模型結果。
+
+> **現況摘要（2026-09-23）：** 目前同時存在 ordinary `run`、多模型 `matrix` 和獨立的
+> `measure unified` 三條評估路徑。ordinary run 是逐輪生成後立即評審；matrix 先完成
+> subject lanes，再把同一份 frozen answer 交給 Judges；unified 才會對每個 answer 一次
+> 抽取固定 claim inventory。Attribution、Answer Relevancy 與 capsule ablation 是可選或
+> 歷史測量，不是每次 run 的預設步驟。缺失 provider、Judge、turn 或 evidence 仍保留
+> `UNAVAILABLE`/`NOT_ATTEMPTED`，不轉成品質零分。
 
 - [單一 deployment 操作指南](evaluation/README/README.md)
 - [多模型 matrix 操作指南](evaluation_multimodels/README/README.md)
