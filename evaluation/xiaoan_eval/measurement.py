@@ -71,10 +71,9 @@ def retrieval(row):
         dcg+=grade/math.log2(rank+1)
     ideal=sum(grade/math.log2(i+2) for i,grade in enumerate(sorted(qrels.values(),reverse=True)[:k]))
     return {'status':'AVAILABLE','k':k,'returned_n':len(top),'relevant_n':gold,
-            'precision_at_k':hits/k,'recall_at_k':hits/gold if gold else None,
             'reciprocal_rank_at_k':rr if gold else None,'ap_at_k':ap/min(gold,k) if gold else None,
             'ndcg_at_k':dcg/ideal if ideal else None,'gain':'linear nonnegative relevance',
-            'ap_denominator':'min(total relevant,k)','short_list_policy':'unfilled slots count in precision denominator',
+            'ap_denominator':'min(total relevant,k)',
             'input_hash':digest(row)}
 
 def retrieval_batch(rows):
@@ -87,7 +86,7 @@ def retrieval_batch(rows):
     aggregates=[]
     for key,group in strata.items():
         metrics={}
-        for metric in ('precision_at_k','recall_at_k','reciprocal_rank_at_k','ap_at_k','ndcg_at_k'):
+        for metric in ('reciprocal_rank_at_k','ap_at_k','ndcg_at_k'):
             vals=[r[metric] for r in group if r['status']=='AVAILABLE' and r[metric] is not None]
             metrics[metric]={'mean':mean(vals) if vals else None,'n':len(vals)}
         aggregates.append({'configuration':list(key),'metrics':metrics})

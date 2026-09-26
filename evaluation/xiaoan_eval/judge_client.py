@@ -26,7 +26,9 @@ class JudgeClient:
         self._rating_rule = rating_rule
         self.judge_id = judge_id or os.getenv("XIAOAN_JUDGE_ID", "judge:configured")
         self.provider_id = provider_id or os.getenv("XIAOAN_JUDGE_PROVIDER", "configured")
-        self.model = model or os.getenv("XIAOAN_JUDGE_MODEL", "configured")
+        from xiaoan_eval_core import model_config
+        role = "XIAOAN_SECONDARY_JUDGE_MODEL" if getattr(provider, "__name__", "") == "second_judge" else "XIAOAN_JUDGE_MODEL"
+        self.model = model or model_config.model(role)
         self._checkpoint = checkpoint
         self._checkpoint_event = checkpoint_event
 
@@ -39,17 +41,23 @@ class JudgeClient:
             self._checkpoint({"event": self._checkpoint_event, **{key: request[key] for key in ("case_id", "turn") if key in request}, "raw_response": str(raw), "provider_usage": usage if isinstance(usage, Mapping) else {}, "error": None})
         try:
             result = parse_judge_response(raw, self._rating_rule)
+            catalog = request.get("evidence_catalog", [])
+            if not isinstance(catalog, list):
+                raise TypeError("judge request evidence_catalog must be an array")
+            validate_claim_evidence(result, catalog)
+            result = replace(result, oracle_assessment=validate_oracle(result.oracle_assessment, request))
         except Exception as exc:
             if self._checkpoint is not None:
                 self._checkpoint({"event": f"{self._checkpoint_event}_validation", "status": "ERROR", "error": f"{type(exc).__name__}: {exc}"})
             raise
         if self._checkpoint is not None:
             self._checkpoint({"event": f"{self._checkpoint_event}_validation", "status": "OK", "error": None})
-        catalog = request.get("evidence_catalog", [])
-        if not isinstance(catalog, list):
-            raise TypeError("judge request evidence_catalog must be an array")
-        validate_claim_evidence(result, catalog)
-        return replace(result, oracle_assessment=validate_oracle(result.oracle_assessment, request))
+            resolution = result.oracle_assessment.get("span_resolution", {})
+            if resolution.get("corrections"):
+                self._checkpoint({"event": f"{self._checkpoint_event}_span_resolution",
+                    **{key: request[key] for key in ("case_id", "turn") if key in request},
+                    "binding": result.oracle_assessment["binding"], **resolution})
+        return result
 
 
 def _invoke(provider: Any, request: Mapping[str, Any]) -> str:

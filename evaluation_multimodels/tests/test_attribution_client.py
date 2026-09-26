@@ -83,3 +83,27 @@ def test_client_invokes_injected_provider_and_validates_result() -> None:
 
     assert result.judge_version == "judge-a"
     assert result.claims[0].unsupported_category == "UNVERIFIABLE_UNSUPPORTED"
+
+
+def test_provider_contract_explicitly_types_literals_and_preserves_null() -> None:
+    """The provider's strict subset rejects untyped const/enum schemas."""
+    contract = build_attribution_request("Answer.", _snapshot(), judge_version="judge-a")
+    schema = contract["output_contract"]["schema"]
+
+    def check(node, path):
+        if isinstance(node, dict):
+            if "const" in node or "enum" in node:
+                assert "type" in node, f"{path}: schema must have a 'type' key"
+                values = node["enum"] if "enum" in node else [node["const"]]
+                expected_type = ["string", "null"] if None in values else "string"
+                assert node["type"] == expected_type, path
+            for key, value in node.items():
+                check(value, f"{path}.{key}")
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                check(value, f"{path}[{index}]")
+
+    check(schema, "schema")
+    category = schema["properties"]["claims"]["items"]["properties"]["unsupported_category"]
+    assert None in category["enum"]
+    assert category["type"] == ["string", "null"]

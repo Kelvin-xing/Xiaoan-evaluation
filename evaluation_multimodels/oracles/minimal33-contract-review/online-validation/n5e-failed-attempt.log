@@ -1,0 +1,29 @@
+胶囊隔离测试：已跳过 Safety Classifier 和 Router；不能验证安全分流或胶囊召回，只能使用合成案例。
+当前 PII redactor 仍是透传桩；不要输入真实求助者信息。
+capsule=n5e title=离婚诉讼求助 file=content/capsule/N5e 离婚诉讼求助.md
+ground_model=gpt-6-astra response_model=gpt-6-astra api_key=[redacted]
+每轮都会重新读取胶囊文件；输入 /exit 或 /quit 退出。
+Traceback (most recent call last):
+  File "/Users/mingjiexing/xiaoan/tech/chatflow/poc/capsule_test.py", line 339, in <module>
+    main()
+  File "/Users/mingjiexing/xiaoan/tech/chatflow/poc/capsule_test.py", line 324, in main
+    print_result(session.respond(args.once))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mingjiexing/xiaoan/tech/chatflow/poc/capsule_test.py", line 138, in respond
+    prepared = prepare_capsule_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mingjiexing/xiaoan/tech/chatflow/poc/chat_service.py", line 505, in prepare_capsule_response
+    ) = resolve_ground_with_warnings(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mingjiexing/xiaoan/tech/chatflow/poc/chat_service.py", line 439, in resolve_ground_with_warnings
+    selection = selector.select(
+                ^^^^^^^^^^^^^^^^
+  File "/Users/mingjiexing/xiaoan/tech/chatflow/poc/ground_selector.py", line 234, in select
+    response = create_chat_completion(client, **request_kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mingjiexing/xiaoan/tech/chatflow/poc/openai_compat.py", line 61, in create_chat_completion
+    text, response_id = collect_responses_stream(client, request)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mingjiexing/xiaoan/tech/chatflow/poc/openai_compat.py", line 39, in collect_responses_stream
+    raise RuntimeError("Responses stream failed or was incomplete")
+RuntimeError: Responses stream failed or was incomplete

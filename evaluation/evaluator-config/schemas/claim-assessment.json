@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "claim-assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "binding",
+    "claims",
+    "requirements"
+  ],
+  "properties": {
+    "binding": {
+      "type": "string"
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "faithfulness", "correctness"],
+        "properties": {
+          "id": {"type": "string"},
+          "faithfulness": {"$ref": "#/$defs/dimension"},
+          "correctness": {"$ref": "#/$defs/dimension"}
+        }
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "verdict", "reason", "answer_spans"],
+        "properties": {
+          "id": {"type": "string"},
+          "verdict": {"type": "string", "enum": ["SATISFIED", "VIOLATED", "UNCERTAIN", "NOT_APPLICABLE"]},
+          "reason": {"type": "string"},
+          "answer_spans": {"type": "array", "items": {"$ref": "#/$defs/answer_span"}}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "answer_span": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start", "end", "text"],
+      "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}, "text": {"type": "string"}}
+    },
+    "span": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ref", "start", "end", "text"],
+      "properties": {"ref": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"}, "text": {"type": "string"}}
+    },
+    "dimension": {
+      "type": "object", "additionalProperties": false,
+      "required": ["verdict", "evidence", "reason"],
+      "properties": {
+        "verdict": {"type": "string", "enum": ["ENTAILED", "PARTIAL", "CONTRADICTED", "UNSUPPORTED", "UNKNOWN", "NOT_APPLICABLE"]},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/span"}},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}

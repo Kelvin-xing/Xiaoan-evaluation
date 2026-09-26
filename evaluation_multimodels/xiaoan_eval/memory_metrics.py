@@ -67,3 +67,30 @@ def memory_observation(checkpoint: MemoryCheckpoint, trace: Mapping[str, Any]) -
         "stale_or_unsafe": not decision if kind in {"stale", "unsafe"} and decision is not None else None,
         "contamination_candidates": sorted(contamination) if kind == "isolation" and contamination is not None else None,
     }
+
+
+def conversation_context_observation(prior_user_inputs, trace):
+    """Observe Router and Composer separately; never invent semantic memory flags."""
+    from .evidence import validate_effective_context_snapshot
+    if not prior_user_inputs:
+        return {'status':'NOT_APPLICABLE','reason':'first turn has no prior inputs'}
+    try:
+        snapshot=validate_effective_context_snapshot(trace['effective_context_snapshot'])
+    except (KeyError,ValueError,TypeError):
+        return {'status':'UNAVAILABLE','reason':'TRACE_MISSING'}
+    router_texts=[u.content for u in snapshot.router.units if u.layer=='PRIOR_USER']
+    composer_texts=[u.content for u in snapshot.composer.units if u.layer=='PRIOR_USER']
+    raw=trace['effective_context_snapshot'].get('invocations',{}).get('composer',{})
+    continuation=raw.get('provider_continuation_used')
+    expected=list(prior_user_inputs)
+    supplied=trace.get('router_context',{}).get('supplied_completed_turns')
+    router_expected=expected[-supplied:] if type(supplied) is int and supplied>0 else [] if supplied==0 else expected
+    router_matches=router_texts==router_expected if snapshot.router.status=='INVOKED' else None
+    # Unknown/implicit continuation needs its own captured parent evidence, not a guessed pass.
+    composer_matches=composer_texts==expected if continuation is False else None
+    return {'status':'AVAILABLE','router_history_matches_window':router_matches,
+            'composer_explicit_history_matches':composer_matches,
+            'composer_history_reason':'EXPLICIT_HISTORY_CHECK' if continuation is False else 'TRACE_MISSING: implicit provider parent context not captured',
+            'provider_continuation_used':continuation,'router_history_count':len(router_texts),
+            'composer_history_count':len(composer_texts),'expected_history_count':len(expected),
+            'semantic_use':'UNAVAILABLE: requires answer-to-fact evidence; context presence alone is insufficient'}

@@ -1,4 +1,8 @@
-"""Render and publish the two-file evaluation deliverable pair."""
+"""Publish deterministic experiment/stability diagnostics, never an LLM report.
+
+Frozen Answer Evaluation uses frozen_export and the JSON-grounded report engine.
+These helpers belong to separate measurement methods retained by the refactor.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ def validate_output_target(output: Path) -> None:
     _validate_public_directory(output)
 
 
-def publish_deliverables(model: ReportModel, output: Path, report_text: str) -> None:
+def publish_deliverables(model: ReportModel, output: Path, report_text: str | None = None) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     lock_path = output.parent / f".{output.name}.evaluation.lock"
     journal_path = output.parent / f".{output.name}.evaluation-journal.json"
@@ -33,6 +37,8 @@ def publish_deliverables(model: ReportModel, output: Path, report_text: str) -> 
             workbook_path = staging / "results.xlsx"
             report_path = staging / "report.md"
             write_workbook(model, workbook_path)
+            if report_text is None:
+                report_text = render_decision_report(model)
             report_path.write_text(report_text, encoding="utf-8")
             facts = read_workbook(workbook_path)
             if facts.generation_id != model.generation_id:
@@ -64,7 +70,7 @@ def render_decision_report(model: ReportModel) -> str:
     lines = [
         "---", f"generation_id: {model.generation_id}", f"schema_version: {model.schema_version}",
         f"artifact_state: {model.artifact_state}", "---", "", "# 評估決策報告", "",
-        "## 執行結果", "", f"- 產物狀態：`{_display_status(model.artifact_state)}`",
+        "可讀明細：`02_Turns` 情境摘要；`Claims` 聲明；`Evidence` 引文；`Relevancy` 反向問題；`Requirements` 要求判定；`Groups` 分組。缺失資料不計零分。", "", "## 執行結果", "", f"- 產物狀態：`{_display_status(model.artifact_state)}`",
         f"- 評估結論：`{_display_status(overview.get('Evaluation verdict', 'UNAVAILABLE'))}`",
         f"- 平均案例分（0–3）：`{_display(overview.get('Overall score'))}`",
         f"- 執行／門檻通過率：`{_display(overview.get('Execution gate pass rate'))}`",
@@ -108,6 +114,23 @@ def render_decision_report(model: ReportModel) -> str:
     lines.extend(f"| {_md(row.get('metric'))} | {_display(row.get('value'))} |" for row in dimensions)
     if not dimensions:
         lines.append("| 沒有已評估維度 | 不可用（UNAVAILABLE） |")
+    dimension_facts = [row for row in model.metrics if str(row.get("metric_id", "")).startswith("judge:") and row.get("case_id") != "__RUN__"]
+    lines.extend(["", "## 維度扣分理由與例證", "", "| 案例 | 輪次 | 維度 | 分數 | 扣分理由／證據 | 支持例證 |", "| --- | ---: | --- | ---: | --- | --- |"])
+    for row in dimension_facts[:300]:
+        evidence = str(row.get("evidence_refs") or "")
+        reason = str(row.get("reason") or "")
+        supporting = ""
+        if evidence.startswith("{"):
+            try:
+                parsed = json.loads(evidence)
+                supporting = "; ".join(str(x) for x in parsed.get("supporting", []) if x)
+                if parsed.get("deduction") and not reason:
+                    reason = "; ".join(str(x) for x in parsed.get("deduction", []) if x)
+            except (TypeError, ValueError):
+                supporting = evidence
+        else:
+            supporting = evidence
+        lines.append(f"| {_md(row.get('case_id'))} | {_display(row.get('turn'))} | {_md(row.get('dimension'))} | {_display(row.get('raw_score'))} | {_md(reason or '沒有扣分證據')} | {_md(supporting or '沒有支持例證')} |")
     lines.extend(["", "## 測試案例結果", "", "| 案例 | 狀態 | 最終分數 | 失敗階段 | 人工複核 | 延遲（毫秒） |", "| --- | --- | ---: | --- | --- | ---: |"]) 
     for row in model.cases:
         lines.append(f"| {_md(row.get('case_id'))} | {_md(_display_status(row.get('status')))} | {_display(row.get('final_score'))} | {_md(row.get('failure_stage') or '-')} | {_md(_display_status(row.get('review_status')))} | {_display(row.get('total_ms'))} |")

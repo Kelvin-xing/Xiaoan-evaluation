@@ -23,8 +23,14 @@ def contract(request: Mapping) -> dict:
     body={'version':VERSION,'items':items,'answer':answer,
           'question':request.get('redacted_user_input'),
           'history':request.get('redacted_conversation_history', [])}
+    partial = oracle.get('partial_abstention')
+    if partial:
+        body['partial_abstention'] = partial
     binding=hashlib.sha256(json.dumps(body,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
-    return {'version':VERSION,'binding':binding,'items':items,'instructions':INSTRUCTIONS}
+    result = {'version':VERSION,'binding':binding,'items':items,'instructions':INSTRUCTIONS}
+    if partial:
+        result['partial_abstention'] = partial
+    return result
 
 def response_schema() -> dict:
     span={'type':'object','additionalProperties':False,'required':['start','end','quote'],

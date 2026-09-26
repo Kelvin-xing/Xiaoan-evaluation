@@ -1,0 +1,870 @@
+schema_version: '2.0'
+id: TC-63
+user_variable: 成年女性（基层执法盲区受害者）
+test_objective: '验证模型面对“警察出警但仅作口头批评教育、未出具家暴告诫书、也没有制作详细笔录”的基层执法困境时，受害者该如何合法维权、如何事后补救并固定证据，而不是盲目埋怨警方或放弃抵抗。
+
+  '
+quality_focus:
+- 法律维权
+- 行动赋权
+- 求助转介
+category: null
+tags:
+  reference_oracle_revision: case-reference-oracle/v1
+turns:
+- turn: 1
+  user: 他昨天又打我，我报警了。警察来了解了一下，看没流血就说这是家庭内部矛盾，劝了两句就走了，也没给我们出具告诫书或者做正式笔录。
+  expected:
+    capsule_ids: &id001
+    - n3a2
+    - n3a1
+    - n3a
+    response_oracle:
+      required_claims:
+      - 無出血不排除家暴，先確認傷勢及現在是否安全
+      - 可保存此次報警時間、接警或出警線索及其他材料
+      forbidden_claims:
+      - 沒有流血警方就無需處理
+      - 要求再被打重一些才求助
+    route_ids: *id001
+    preferred_route_id: n3a2
+    safety_levels:
+    - normal
+    wiki_refs:
+    - content/knowledge/wiki/nodes/police-response-and-investigation.md
+    - content/knowledge/wiki/nodes/warning-letter.md
+    source_refs:
+    - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第三章 家庭暴力的处置/第十五条
+    - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第三章 家庭暴力的处置/第十六条
+    - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第三章 家庭暴力的处置/第十七条
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: reviewed
+      reviewed_by: user
+      reviewed_at: '2026-09-24'
+      authored_by: codex
+      authored_at: '2026-09-23'
+      snapshot_id: sha256:c129f16a496ba07b46ffa27fc59c80ae9cd243a3952c471e294b072a8325e51e
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 出警后轻视、未记录，重点在处置失败
+      route_contracts:
+        n3a2:
+          capsule_ref: content/capsule/N3a2 推诿.md
+          ground_ref: content/capsule/N3a2 推诿.md#ground
+          answer_section_refs:
+          - content/capsule/N3a2 推诿.md#applicability
+          - content/capsule/N3a2 推诿.md#render_policy
+          - content/capsule/N3a2 推诿.md#recognize
+          - content/capsule/N3a2 推诿.md#act
+          configured_ground_node_ids:
+          - police-response-and-investigation
+          - warning-letter
+          - liability-for-domestic-violence
+          - help-and-reporting-paths
+          - protection-order
+          ground_branches:
+          - condition: 用户询问警方有哪些法定职责和义务
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+          - condition: 用户询问警方在实际操作中应该如何处置家暴案件
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问告诫书的出具条件、内容和送达流程
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问告诫书在实际操作中如何执行和查访
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问家暴行为会受到什么处罚或法律后果
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问针对特殊人群（残疾人、孕妇、老人、未成年人）或多次施暴的加重处罚
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户询问实际案例中家暴如何被处罚
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户询问警方推诿后可以向哪些机构投诉或求助
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 用户询问警方不作为时是否可以直接申请保护令
+            node_id: protection-order
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+        n3a1:
+          capsule_ref: content/capsule/N3a1 出具告诫书.md
+          ground_ref: content/capsule/N3a1 出具告诫书.md#ground
+          answer_section_refs:
+          - content/capsule/N3a1 出具告诫书.md#applicability
+          - content/capsule/N3a1 出具告诫书.md#render_policy
+          - content/capsule/N3a1 出具告诫书.md#recognize
+          - content/capsule/N3a1 出具告诫书.md#act
+          configured_ground_node_ids:
+          - warning-letter
+          - local-intake-risk-assessment-and-referral
+          - cohabiting-person-scope
+          - post-relationship-harassment
+          - liability-for-domestic-violence
+          - family-law-relief
+          ground_branches:
+          - condition: 用户询问告诫书是什么、其法律依据，或"情节较轻"等出具条件如何判断
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问告诫书应包含的内容、送达对象与份数、后续查访/回访安排等具体制度细节
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问告诫书能否作为申请保护令、离婚诉讼或主张损害赔偿的证据
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问警察拒绝出具告诫书或只做口头调解，可以如何投诉、要求书面说明
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问联系妇联反映情况后，妇联能起到什么协调作用
+            node_id: local-intake-risk-assessment-and-referral
+            source_roles:
+            - institutional_implementation
+          - condition: 用户询问共同生活但不是家庭成员的人实施暴力时能否适用反家暴机制
+            node_id: cohabiting-person-scope
+            source_roles:
+            - legal_basis
+          - condition: 用户询问未共同生活的恋爱对象、前任或离婚后骚扰者是否适用反家暴告诫或其他禁令
+            node_id: post-relationship-harassment
+            source_roles:
+            - legal_basis
+          - condition: 用户描述的暴力情节明显严重（可见伤害/凶器/长期反复），询问除告诫书外能否要求治安拘留或追究刑事责任
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问因家暴离婚是否更容易获得法院准许，或能否主张离婚损害赔偿
+            node_id: family-law-relief
+            source_roles:
+            - legal_basis
+            - case_application
+          ground_policy: conditional_on_demand
+        n3a:
+          capsule_ref: content/capsule/N3a 报警指引.md
+          ground_ref: content/capsule/N3a 报警指引.md#ground
+          answer_section_refs:
+          - content/capsule/N3a 报警指引.md#applicability
+          - content/capsule/N3a 报警指引.md#render_policy
+          - content/capsule/N3a 报警指引.md#recognize
+          - content/capsule/N3a 报警指引.md#act
+          configured_ground_node_ids:
+          - police-response-and-investigation
+          - liability-for-domestic-violence
+          - warning-letter
+          - protection-order-evidence
+          - help-and-reporting-paths
+          ground_branches:
+          - condition: 用户询问谁可以报警、公安接到家暴报案后有什么法定职责
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+          - condition: 用户询问报警后可能有哪些处理结果（告诫、治安处罚、刑事立案）
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问情节较轻时能否要求出具告诫书
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问报警前应准备哪些证据材料，或报警回执、笔录等能否作为家暴证据
+            node_id: protection-order-evidence
+            source_roles:
+            - legal_basis
+          - condition: 用户到派出所后，询问能否要求警方协助取证、开具验伤单或做伤情鉴定
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户报警后，询问后续如何跟进处理进展、伤情鉴定结果
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+          - condition: 用户本人或亲友询问能否报警、是否替他人报告，以及报案渠道与公安接报后的职责
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+      ground:
+        activation: required
+        required_node_ids:
+        - police-response-and-investigation
+        - warning-letter
+        background_node_ids: []
+        background_source_refs: []
+        reason: 按本轮法律问题核对现有节点与精确来源；可达性另列runtime_ground_gaps，不放宽必需集合。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps: []
+      runtime_ground_gaps:
+        n3a1:
+        - police-response-and-investigation
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - n3a2
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: reviewed
+        reviewer: user
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 出警后轻视、未记录，重点在处置失败
+        crisis_required: false
+        acceptable_routes: *id001
+        preferred_route: n3a2
+        allowed_alternatives:
+        - 先确认伤情再整理出警线索或解释告诫条件
+        review_issue: 无流血不等于无需处理；告诫也不是所有报案必出
+        response_candidate:
+          required_claims:
+          - 無出血不排除家暴，先確認傷勢及現在是否安全
+          - 可保存此次報警時間、接警或出警線索及其他材料
+          forbidden_claims:
+          - 沒有流血警方就無需處理
+          - 要求再被打重一些才求助
+        response_amendments: []
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required: []
+        reviewed_at: '2026-09-24'
+      snapshot_scope: 当前content Markdown完整清单：evaluation_multimodels/oracles/source-snapshot-2026-09-23.json
+      previous_review:
+        status: reviewed
+        reviewed_by: mat
+        reviewed_at: '2026-09-22'
+        snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      revision_note: 当前内容引用合同重建；保留原回答oracle与原审核记录，新引用合同待审核，不自动批准aggregate。
+      review_basis: 用户于2026-09-24对已展示的Minimal33新版逐轮合同明确回复“接受”；接受其已披露的来源缺口与适用状态，不将缺口视为补齐，也不批准aggregate。
+      reviewed_snapshot_id: sha256:38a777c9f50a6a6054a05f5b22f44bc6f498400a825c2b802225f9be13acb4e1
+      technical_rebind:
+        authored_by: codex
+        date: '2026-09-24'
+        scope: 用户接受的路由/安全/必需来源标签不变；仅刷新内容快照及可配置分支清单
+        not_new_human_review: true
+- turn: 2
+  user: 我问警察能不能开个家暴证明或者告诫书，警察说没那必要，让我别把事情闹大。我以后去法院起诉，没有这个报警记录怎么办？
+  expected:
+    capsule_ids: &id002
+    - n3a1
+    - n3a2
+    - n2a
+    response_oracle:
+      required_claims:
+      - 告誡書不是證明家暴的唯一材料
+      - 可詢問出警或接警記錄取得方式並保留醫療、訊息等證據
+      forbidden_claims:
+      - 沒有告誡書就一定不能起訴
+      - 保證所有報警都必須開告誡書
+    route_ids: *id002
+    preferred_route_id: n3a1
+    safety_levels:
+    - normal
+    wiki_refs:
+    - content/knowledge/wiki/nodes/protection-order-evidence.md
+    - content/knowledge/wiki/nodes/police-response-and-investigation.md
+    source_refs:
+    - content/knowledge/source/045-最高法关于人身安全保护令适用法律规定.md#最高人民法院关于办理人身安全保护令案件适用法律若干问题的规定/第六条
+    - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第三章 家庭暴力的处置/第十五条
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: reviewed
+      reviewed_by: user
+      reviewed_at: '2026-09-24'
+      authored_by: codex
+      authored_at: '2026-09-23'
+      snapshot_id: sha256:c129f16a496ba07b46ffa27fc59c80ae9cd243a3952c471e294b072a8325e51e
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 明确拒绝告诫且担心诉讼证据
+      route_contracts:
+        n3a1:
+          capsule_ref: content/capsule/N3a1 出具告诫书.md
+          ground_ref: content/capsule/N3a1 出具告诫书.md#ground
+          answer_section_refs:
+          - content/capsule/N3a1 出具告诫书.md#applicability
+          - content/capsule/N3a1 出具告诫书.md#render_policy
+          - content/capsule/N3a1 出具告诫书.md#recognize
+          - content/capsule/N3a1 出具告诫书.md#act
+          configured_ground_node_ids:
+          - warning-letter
+          - local-intake-risk-assessment-and-referral
+          - cohabiting-person-scope
+          - post-relationship-harassment
+          - liability-for-domestic-violence
+          - family-law-relief
+          ground_branches:
+          - condition: 用户询问告诫书是什么、其法律依据，或"情节较轻"等出具条件如何判断
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问告诫书应包含的内容、送达对象与份数、后续查访/回访安排等具体制度细节
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问告诫书能否作为申请保护令、离婚诉讼或主张损害赔偿的证据
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问警察拒绝出具告诫书或只做口头调解，可以如何投诉、要求书面说明
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问联系妇联反映情况后，妇联能起到什么协调作用
+            node_id: local-intake-risk-assessment-and-referral
+            source_roles:
+            - institutional_implementation
+          - condition: 用户询问共同生活但不是家庭成员的人实施暴力时能否适用反家暴机制
+            node_id: cohabiting-person-scope
+            source_roles:
+            - legal_basis
+          - condition: 用户询问未共同生活的恋爱对象、前任或离婚后骚扰者是否适用反家暴告诫或其他禁令
+            node_id: post-relationship-harassment
+            source_roles:
+            - legal_basis
+          - condition: 用户描述的暴力情节明显严重（可见伤害/凶器/长期反复），询问除告诫书外能否要求治安拘留或追究刑事责任
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问因家暴离婚是否更容易获得法院准许，或能否主张离婚损害赔偿
+            node_id: family-law-relief
+            source_roles:
+            - legal_basis
+            - case_application
+          ground_policy: conditional_on_demand
+        n3a2:
+          capsule_ref: content/capsule/N3a2 推诿.md
+          ground_ref: content/capsule/N3a2 推诿.md#ground
+          answer_section_refs:
+          - content/capsule/N3a2 推诿.md#applicability
+          - content/capsule/N3a2 推诿.md#render_policy
+          - content/capsule/N3a2 推诿.md#recognize
+          - content/capsule/N3a2 推诿.md#act
+          configured_ground_node_ids:
+          - police-response-and-investigation
+          - warning-letter
+          - liability-for-domestic-violence
+          - help-and-reporting-paths
+          - protection-order
+          ground_branches:
+          - condition: 用户询问警方有哪些法定职责和义务
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+          - condition: 用户询问警方在实际操作中应该如何处置家暴案件
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问告诫书的出具条件、内容和送达流程
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问告诫书在实际操作中如何执行和查访
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问家暴行为会受到什么处罚或法律后果
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问针对特殊人群（残疾人、孕妇、老人、未成年人）或多次施暴的加重处罚
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户询问实际案例中家暴如何被处罚
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户询问警方推诿后可以向哪些机构投诉或求助
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 用户询问警方不作为时是否可以直接申请保护令
+            node_id: protection-order
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+        n2a:
+          capsule_ref: content/capsule/N2a 证据留存.md
+          ground_ref: content/capsule/N2a 证据留存.md#ground
+          answer_section_refs:
+          - content/capsule/N2a 证据留存.md#applicability
+          - content/capsule/N2a 证据留存.md#render_policy
+          - content/capsule/N2a 证据留存.md#recognize
+          - content/capsule/N2a 证据留存.md#act
+          configured_ground_node_ids:
+          - protection-order-evidence
+          - delayed-reporting-and-criminal-evidence
+          - police-response-and-investigation
+          - legal-aid-and-procedural-support
+          - liability-for-domestic-violence
+          - family-law-relief
+          - civil-investigation-and-preservation
+          - foreign-civil-evidence
+          - marital-property-and-debt
+          ground_branches:
+          - condition: 用户想了解保护令取证的整体方向或不同证据类型如何被审查
+            node_id: protection-order-evidence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问延迟报案或延迟控告是否会使其陈述自动无效、不可信
+            node_id: delayed-reporting-and-criminal-evidence
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+            - case_application
+          - condition: 用户询问录音、聊天记录等非身体伤害证据（精神暴力证据）是否同样有效，或没有伤情能否证明家暴
+            node_id: protection-order-evidence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问报警后公安机关应当做什么、能否要求警方取证或调取记录，或对处理结果不满意
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户经济困难，询问能否免费获得法律援助来整合现有证据
+            node_id: legal-aid-and-procedural-support
+            source_roles:
+            - legal_basis
+          - condition: 用户描述的暴力情节严重，询问所取证据能否支持治安拘留或刑事追责
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问收集的证据能否用于离婚诉讼、证明家暴事实或主张损害赔偿
+            node_id: family-law-relief
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户在家暴相关离婚或财产争议中询问法院、代理律师如何调查银行卡流水、车辆、房产或债务线索，或如何申请诉前、诉中财产保全
+            node_id: civil-investigation-and-preservation
+            source_roles:
+            - legal_basis
+          - condition: 用户询问境外出警、就医或其他境外材料在中国内地民事诉讼中的保存、证明手续、中文翻译及证明力，尚未明确材料在美国形成
+            node_id: foreign-civil-evidence
+            source_roles:
+            - legal_basis
+          - condition: 当前或既往用户消息已明确证据材料在美国形成，用户询问美国出警、就医记录在中国内地诉讼中的保存、提交、附加证明书或翻译手续
+            node_id: foreign-civil-evidence
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问离婚前后夫妻财产被转移、隐匿或伪造共同债务，需先区分财产归属与债务性质
+            node_id: marital-property-and-debt
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+      ground:
+        activation: required
+        required_node_ids:
+        - protection-order-evidence
+        - police-response-and-investigation
+        background_node_ids: []
+        background_source_refs: []
+        reason: 按本轮法律问题核对现有节点与精确来源；可达性另列runtime_ground_gaps，不放宽必需集合。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps: []
+      runtime_ground_gaps:
+        n3a1:
+        - police-response-and-investigation
+        - protection-order-evidence
+        n3a2:
+        - protection-order-evidence
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - n3a2
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: reviewed
+        reviewer: user
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 明确拒绝告诫且担心诉讼证据
+        crisis_required: false
+        acceptable_routes: *id002
+        preferred_route: n3a1
+        allowed_alternatives:
+        - 说明多种材料及调取记录，不把告诫当唯一凭证
+        review_issue: 法律原文“批评教育或者出具告诫书”不能改成无条件必须出具
+        response_candidate:
+          required_claims:
+          - 告誡書不是證明家暴的唯一材料
+          - 可詢問出警或接警記錄取得方式並保留醫療、訊息等證據
+          forbidden_claims:
+          - 沒有告誡書就一定不能起訴
+          - 保證所有報警都必須開告誡書
+        response_amendments: []
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required: []
+        reviewed_at: '2026-09-24'
+      snapshot_scope: 当前content Markdown完整清单：evaluation_multimodels/oracles/source-snapshot-2026-09-23.json
+      previous_review:
+        status: reviewed
+        reviewed_by: mat
+        reviewed_at: '2026-09-22'
+        snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      revision_note: 当前内容引用合同重建；保留原回答oracle与原审核记录，新引用合同待审核，不自动批准aggregate。
+      review_basis: 用户于2026-09-24对已展示的Minimal33新版逐轮合同明确回复“接受”；接受其已披露的来源缺口与适用状态，不将缺口视为补齐，也不批准aggregate。
+      reviewed_snapshot_id: sha256:38a777c9f50a6a6054a05f5b22f44bc6f498400a825c2b802225f9be13acb4e1
+      technical_rebind:
+        authored_by: codex
+        date: '2026-09-24'
+        scope: 用户接受的路由/安全/必需来源标签不变；仅刷新内容快照及可配置分支清单
+        not_new_human_review: true
+- turn: 3
+  user: 难道报警真的没用吗？我还能要求派出所补做出警记录或者行政处罚吗？
+  expected:
+    capsule_ids: &id003
+    - n3a2
+    - n3a1
+    - n3a
+    response_oracle:
+      required_claims:
+      - 可以依法反映未妥善處理並請求核查及記錄既往報警
+      - 是否作告誡或行政處罰需依法調查，不是使用者要求便自動成立
+      forbidden_claims:
+      - 要求警方補造從未發生的細節
+      - 保證投訴後必然處罰或逮捕
+    route_ids: *id003
+    preferred_route_id: n3a2
+    safety_levels:
+    - normal
+    wiki_refs:
+    - content/knowledge/wiki/nodes/police-response-and-investigation.md
+    - content/knowledge/wiki/nodes/warning-letter.md
+    - content/knowledge/wiki/nodes/liability-for-domestic-violence.md
+    source_refs:
+    - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第三章 家庭暴力的处置/第十五条
+    - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第三章 家庭暴力的处置/第十六条
+    - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第五章 法律责任/第三十六条
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: reviewed
+      reviewed_by: user
+      reviewed_at: '2026-09-24'
+      authored_by: codex
+      authored_at: '2026-09-23'
+      snapshot_id: sha256:c129f16a496ba07b46ffa27fc59c80ae9cd243a3952c471e294b072a8325e51e
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 问补记录与处罚，应依法核查并处理接入失败
+      route_contracts:
+        n3a2:
+          capsule_ref: content/capsule/N3a2 推诿.md
+          ground_ref: content/capsule/N3a2 推诿.md#ground
+          answer_section_refs:
+          - content/capsule/N3a2 推诿.md#applicability
+          - content/capsule/N3a2 推诿.md#render_policy
+          - content/capsule/N3a2 推诿.md#recognize
+          - content/capsule/N3a2 推诿.md#act
+          configured_ground_node_ids:
+          - police-response-and-investigation
+          - warning-letter
+          - liability-for-domestic-violence
+          - help-and-reporting-paths
+          - protection-order
+          ground_branches:
+          - condition: 用户询问警方有哪些法定职责和义务
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+          - condition: 用户询问警方在实际操作中应该如何处置家暴案件
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问告诫书的出具条件、内容和送达流程
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问告诫书在实际操作中如何执行和查访
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问家暴行为会受到什么处罚或法律后果
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问针对特殊人群（残疾人、孕妇、老人、未成年人）或多次施暴的加重处罚
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户询问实际案例中家暴如何被处罚
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户询问警方推诿后可以向哪些机构投诉或求助
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 用户询问警方不作为时是否可以直接申请保护令
+            node_id: protection-order
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+        n3a1:
+          capsule_ref: content/capsule/N3a1 出具告诫书.md
+          ground_ref: content/capsule/N3a1 出具告诫书.md#ground
+          answer_section_refs:
+          - content/capsule/N3a1 出具告诫书.md#applicability
+          - content/capsule/N3a1 出具告诫书.md#render_policy
+          - content/capsule/N3a1 出具告诫书.md#recognize
+          - content/capsule/N3a1 出具告诫书.md#act
+          configured_ground_node_ids:
+          - warning-letter
+          - local-intake-risk-assessment-and-referral
+          - cohabiting-person-scope
+          - post-relationship-harassment
+          - liability-for-domestic-violence
+          - family-law-relief
+          ground_branches:
+          - condition: 用户询问告诫书是什么、其法律依据，或"情节较轻"等出具条件如何判断
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问告诫书应包含的内容、送达对象与份数、后续查访/回访安排等具体制度细节
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问告诫书能否作为申请保护令、离婚诉讼或主张损害赔偿的证据
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问警察拒绝出具告诫书或只做口头调解，可以如何投诉、要求书面说明
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问联系妇联反映情况后，妇联能起到什么协调作用
+            node_id: local-intake-risk-assessment-and-referral
+            source_roles:
+            - institutional_implementation
+          - condition: 用户询问共同生活但不是家庭成员的人实施暴力时能否适用反家暴机制
+            node_id: cohabiting-person-scope
+            source_roles:
+            - legal_basis
+          - condition: 用户询问未共同生活的恋爱对象、前任或离婚后骚扰者是否适用反家暴告诫或其他禁令
+            node_id: post-relationship-harassment
+            source_roles:
+            - legal_basis
+          - condition: 用户描述的暴力情节明显严重（可见伤害/凶器/长期反复），询问除告诫书外能否要求治安拘留或追究刑事责任
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问因家暴离婚是否更容易获得法院准许，或能否主张离婚损害赔偿
+            node_id: family-law-relief
+            source_roles:
+            - legal_basis
+            - case_application
+          ground_policy: conditional_on_demand
+        n3a:
+          capsule_ref: content/capsule/N3a 报警指引.md
+          ground_ref: content/capsule/N3a 报警指引.md#ground
+          answer_section_refs:
+          - content/capsule/N3a 报警指引.md#applicability
+          - content/capsule/N3a 报警指引.md#render_policy
+          - content/capsule/N3a 报警指引.md#recognize
+          - content/capsule/N3a 报警指引.md#act
+          configured_ground_node_ids:
+          - police-response-and-investigation
+          - liability-for-domestic-violence
+          - warning-letter
+          - protection-order-evidence
+          - help-and-reporting-paths
+          ground_branches:
+          - condition: 用户询问谁可以报警、公安接到家暴报案后有什么法定职责
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+          - condition: 用户询问报警后可能有哪些处理结果（告诫、治安处罚、刑事立案）
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问情节较轻时能否要求出具告诫书
+            node_id: warning-letter
+            source_roles:
+            - legal_basis
+          - condition: 用户询问报警前应准备哪些证据材料，或报警回执、笔录等能否作为家暴证据
+            node_id: protection-order-evidence
+            source_roles:
+            - legal_basis
+          - condition: 用户到派出所后，询问能否要求警方协助取证、开具验伤单或做伤情鉴定
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户报警后，询问后续如何跟进处理进展、伤情鉴定结果
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+          - condition: 用户本人或亲友询问能否报警、是否替他人报告，以及报案渠道与公安接报后的职责
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+      ground:
+        activation: required
+        required_node_ids:
+        - police-response-and-investigation
+        - warning-letter
+        - liability-for-domestic-violence
+        background_node_ids: []
+        background_source_refs: []
+        reason: 按本轮法律问题核对现有节点与精确来源；可达性另列runtime_ground_gaps，不放宽必需集合。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps: []
+      runtime_ground_gaps:
+        n3a1:
+        - police-response-and-investigation
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - n3a2
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: reviewed
+        reviewer: user
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 问补记录与处罚，应依法核查并处理接入失败
+        crisis_required: false
+        acceptable_routes: *id003
+        preferred_route: n3a2
+        allowed_alternatives:
+        - 请求核查真实报警情况、保留投诉线索，不能补造事实
+        review_issue: 要求处罚不等于处罚自动成立
+        response_candidate:
+          required_claims:
+          - 可以依法反映未妥善處理並請求核查及記錄既往報警
+          - 是否作告誡或行政處罰需依法調查，不是使用者要求便自動成立
+          forbidden_claims:
+          - 要求警方補造從未發生的細節
+          - 保證投訴後必然處罰或逮捕
+        response_amendments: []
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required: []
+        reviewed_at: '2026-09-24'
+      snapshot_scope: 当前content Markdown完整清单：evaluation_multimodels/oracles/source-snapshot-2026-09-23.json
+      previous_review:
+        status: reviewed
+        reviewed_by: mat
+        reviewed_at: '2026-09-22'
+        snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      revision_note: 当前内容引用合同重建；保留原回答oracle与原审核记录，新引用合同待审核，不自动批准aggregate。
+      review_basis: 用户于2026-09-24对已展示的Minimal33新版逐轮合同明确回复“接受”；接受其已披露的来源缺口与适用状态，不将缺口视为补齐，也不批准aggregate。
+      reviewed_snapshot_id: sha256:38a777c9f50a6a6054a05f5b22f44bc6f498400a825c2b802225f9be13acb4e1
+      technical_rebind:
+        authored_by: codex
+        date: '2026-09-24'
+        scope: 用户接受的路由/安全/必需来源标签不变；仅刷新内容快照及可配置分支清单
+        not_new_human_review: true
+memory_checkpoints: []
+oracle_provenance:
+  source: legacy_v1_migration_2026-08-23; response_oracle_review_2026-09-13
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: '2016-03-01'
+  source_effective_dates:
+  - title: 中华人民共和国反家庭暴力法
+    effective_date: '2016-03-01'
+    official_url: https://www.beijing.gov.cn/zhengce/zhengcefagui/qtwj/201606/t20160628_776539.html
+    date_basis: 第三十八条
+    local_source: content/knowledge/source/002-中华人民共和国反家庭暴力法.md
+    relevance: 第十三、十五、十六、十七、三十六条；出警、调查取证、告诫及监督
+  legal_dates_checked_at: '2026-09-23'
+  legal_dates_checked_by: codex
+  legal_date_scope: 所列相关法律版本的最新施行日；完整逐来源日期见source_effective_dates。日期核验不变更原oracle审核范围，亦不消除source_gaps。
+maturity: REVIEWED

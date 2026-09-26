@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 from .cases import TestCase
+from .reference_oracle import field_is_reviewed
 
 MEMORY_TYPES = ("remember", "retrieve", "use", "not_use", "update", "isolation", "stale", "unsafe")
 
@@ -22,9 +23,14 @@ def case_coverage(case: TestCase) -> dict[str, Any]:
             counts["tools"] += bool(response.expected_tools)
             counts["goal"] += response.goal_completed is not None
     counts.update({f"memory:{kind}": sum(item.check_type == kind for item in case.memory_checkpoints) for kind in MEMORY_TYPES})
+    reviewed = dict(counts) if case.oracle_gate_eligible else {name: 0 for name in counts}
+    if case.oracle_gate_eligible:
+        for name, field in (("route", "route_ids"), ("safety", "safety_levels")):
+            reviewed[name] = sum(bool(getattr(t.expected, field)) and field_is_reviewed(t.expected, field)
+                                 for t in case.turns if t.expected is not None)
     return {"case_id": case.id, "expected_turns": len(case.turns), "oracle_approved": case.oracle_gate_eligible,
             "maturity": case.maturity, "authored": counts,
-            "reviewed": counts if case.oracle_gate_eligible else {name: 0 for name in counts}}
+            "reviewed": reviewed}
 
 
 def coverage_rows(coverage: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

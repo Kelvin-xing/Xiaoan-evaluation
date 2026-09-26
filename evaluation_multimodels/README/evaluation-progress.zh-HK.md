@@ -22,10 +22,8 @@
 | --- | --- |
 | safety accepted accuracy/recall 下降 | safety/risk classification stage 出現漏判或誤判 |
 | route confusion 增加 | router/capsule selection stage 有 route regression |
-| retrieval FN 增加、Recall@k 下降 | 必要 evidence 沒有被取回 |
-| retrieval FP 增加、precision 下降 | 取回內容包含較多不相關 evidence |
 | MRR/nDCG 下降 | relevant evidence 排名變差 |
-| 高 retrieval recall + 低 faithfulness | generation/context assembly 需要調查 |
+| 已核實必要證據暴露完整，但 faithfulness 低 | generation/context assembly 需要調查；不可單憑暴露數量推斷 |
 | citation recall 下降 | 回答沒有覆蓋必要引用 |
 | refusal FN 增加 | 該拒答的情況未被攔截 |
 | refusal FP 增加 | 系統過度拒答 |

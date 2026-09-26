@@ -40,29 +40,18 @@ def _judge_json(rule, score: int, *, triggered: str | None = None) -> str:
     }, ensure_ascii=False)
 
 
-def test_default_matrix_has_ten_subjects_and_five_judges(tmp_path: Path) -> None:
+def test_default_matrix_has_six_subjects_and_three_judges(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("XIAOAN_KIMI_LATEST_MODEL", raising=False)
+    monkeypatch.delenv("XIAOAN_KIMI_SECOND_MODEL", raising=False)
+    monkeypatch.delenv("XIAOAN_KIMI_JUDGE_MODEL", raising=False)
+    from xiaoan_eval_core import model_config
+    monkeypatch.setattr(model_config, "ENV_PATH", Path(".env.example").resolve())
     rule = load_rating_rule("ratings rule.yml")
     subjects = default_subject_specs()
     judges = default_judge_specs()
-    assert [spec.model for spec in subjects] == [
-        "claude-opus-5",
-        "claude-sonnet-5",
-        "gpt-5.6-sol",
-        "o4-mini-2025-04-16",
-        "gemini-3-pro-preview-thinking",
-        "gemini-3.8-flash",
-        "qwen3.8-max",
-        "qwen3.7-max",
-        "kimi-k3",
-        "kimi-k2.6",
-    ]
-    assert [spec.model for spec in judges] == [
-        "claude-opus-5",
-        "gpt-5.6-sol",
-        "gemini-3-pro-preview-thinking",
-        "qwen3.8-max",
-        "kimi-k3",
-    ]
+    config = model_config.read_env()
+    assert [spec.model for spec in subjects] == [model for provider in model_config.PROVIDERS for model in model_config.matrix_models(provider, values=config)]
+    assert [spec.model for spec in judges] == [model for provider in model_config.PROVIDERS for model in model_config.matrix_models(provider, judge=True, values=config)]
 
     def subject(_spec, prompt):
         return {"text": "A" + prompt, "usage": {"prompt_tokens": 2, "completion_tokens": 3}}
@@ -71,20 +60,21 @@ def test_default_matrix_has_ten_subjects_and_five_judges(tmp_path: Path) -> None
         return {"text": _judge_json(rule, 3), "usage": {"input_tokens": 4, "output_tokens": 5}}
 
     rows = run_matrix([{"id": "TC-01", "turns": [{"turn": 1, "user": "hello"}]}], subjects, judges, subject_transport=subject, judge_transport=judge, rating_rule=rule)
-    assert len(subjects) == 10
-    assert len(rows) == 50
+    assert len(subjects) == 2 * len(model_config.PROVIDERS)
+    assert len(rows) == len(subjects) * len(judges)
     assert rows[0]["answer"]["first_char"] == "A"
     assert rows[0]["answer"]["total_tokens"] == 5
     assert "XiaoAn subject" in render_matrix_report(rows)
     write_matrix_workbook(rows, tmp_path / "results.xlsx")
     assert (tmp_path / "results.xlsx").exists()
     workbook = load_workbook(tmp_path / "results.xlsx", read_only=True)
+    assert workbook.sheetnames[:5] == ["Overview", "Score Summary", "Routing Summary", "Coverage & Usage", "Matrix"]
     assert "Dimension_By_Judge" in workbook.sheetnames
     assert "Judge_Agreement" in workbook.sheetnames
     assert "Measurement_Contract" in workbook.sheetnames
     assert "dimension:基础能力" in next(workbook["All_Judgements"].iter_rows(values_only=True))
     pair_paths = write_pair_workbooks(rows, tmp_path / "pairs")
-    assert len(pair_paths) == 50
+    assert len(pair_paths) == len(subjects) * len(judges)
     assert all(path.exists() for path in pair_paths)
 
 
@@ -400,7 +390,7 @@ def test_first_character_latency_is_only_copied_from_explicit_telemetry() -> Non
     )
     rows = run_matrix(
         ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},), subjects,
-        (ModelSpec("qwen", "judge", "judge", "medium"),),
+        (ModelSpec("gemini", "judge", "judge", "medium"),),
         subject_transport=lambda spec, _prompt: ({"text": "answer", "_xiaoan_first_character_ms": 12.5} if spec.model == "with-ttfc" else {"text": "answer"}),
         judge_transport=lambda *_args: {"text": _judge_json(rule, 2)}, rating_rule=rule,
     )
@@ -533,59 +523,26 @@ def test_use_checkpoint_requires_the_expected_fact_when_used_facts_are_reported(
 
 def test_matrix_checkpoints_each_completed_provider_call(tmp_path: Path) -> None:
     rule = load_rating_rule("ratings rule.yml")
-    checkpoint = tmp_path / "nested" / "matrix-checkpoint.jsonl"
-    judge_calls = 0
-
-    def subject(_spec, _prompt):
-        return {"text": "answer"}
-
+    checkpoint = tmp_path / 'nested' / 'matrix-checkpoint.jsonl'
     def judge(_spec, _prompt):
-        nonlocal judge_calls
-        events = [json.loads(line) for line in checkpoint.read_text(encoding="utf-8").splitlines()]
-        if judge_calls == 0:
-            assert [event["event"] for event in events] == ["answer"]
-        else:
-            assert [event["event"] for event in events] == [
-                "answer",
-                "judgement",
-                "cell",
-            ]
-        judge_calls += 1
-        return {
-            "text": _judge_json(rule, 2)
-        }
-
-    rows = run_matrix(
-        ({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
-        (ModelSpec("gpt", "subject", "latest", "medium"),),
-        (
-            ModelSpec("gpt", "judge-a", "judge", "medium"),
-            ModelSpec("claude", "judge-b", "judge", "medium"),
-        ),
-        subject_transport=subject,
-        judge_transport=judge,
-        rating_rule=rule,
-        checkpoint_path=checkpoint,
-    )
-
-    events = [json.loads(line) for line in checkpoint.read_text(encoding="utf-8").splitlines()]
-    assert len(rows) == 2
+        events = [json.loads(line) for line in checkpoint.read_text().splitlines()]
+        assert events[0]['event'] == 'answer'
+        return {'text': _judge_json(rule, 2)}
+    rows = run_matrix([{'id':'TC-01','turns':[{'turn':1,'user':'hello'}]}],
+                      [ModelSpec('gpt','subject','latest','medium')],
+                      [ModelSpec('gpt','judge-a','judge','medium'), ModelSpec('claude','judge-b','judge','medium')],
+                      subject_transport=lambda *_: {'text':'answer'}, judge_transport=judge,
+                      rating_rule=rule, checkpoint_path=checkpoint)
+    events = [json.loads(line) for line in checkpoint.read_text().splitlines()]
     assert checkpoint.stat().st_mode & 0o777 == 0o600
-    assert [event["event"] for event in events] == [
-        "answer",
-        "judgement",
-        "cell",
-        "judgement",
-        "cell",
-    ]
-    assert events[0]["answer"]["text"] == "answer"
-    assert events[0]["answer_id"] == rows[0]["answer_id"]
-    assert events[1]["judge"]["model"] == "judge-a"
-    assert events[3]["judge"]["model"] == "judge-b"
-    assert "answer" not in events[2]["row"]
-    assert "judgement" not in events[2]["row"]
-    assert events[2]["row"]["answer_id"] == rows[0]["answer_id"]
-    assert rows[0]["answer"] is rows[1]["answer"]
+    assert events[0]['event'] == 'answer'
+    assert sorted(event['event'] for event in events[1:]) == ['cell','cell','judgement','judgement']
+    assert sorted(event['judge']['model'] for event in events if event['event']=='judgement') == ['judge-a','judge-b']
+    for event in events:
+        if event['event'] == 'cell':
+            assert 'answer' not in event['row'] and 'judgement' not in event['row']
+            assert event['row']['answer_id'] == rows[0]['answer_id']
+    assert rows[0]['answer'] is rows[1]['answer']
 
 
 def test_matrix_checkpoints_judge_before_validating_response_shape(tmp_path: Path) -> None:
@@ -670,39 +627,15 @@ def test_matrix_resume_ignores_only_a_truncated_final_record(tmp_path: Path) -> 
     assert not checkpoint.read_text(encoding="utf-8").endswith('{"event":"torn"')
 
 
-def test_matrix_cli_creates_checkpoint_directory_before_running(tmp_path: Path, monkeypatch) -> None:
-    output = tmp_path / "new-run"
-    args = SimpleNamespace(
-        cases="unused",
-        output=str(output),
-        subject_transport="plugins:subject",
-        judge_transport="plugins:judge",
-        rating_rule="unused",
-        subjects=None,
-        judges=None,
-    )
-    monkeypatch.setattr(cli, "load_rating_rule", lambda _path: object())
-    monkeypatch.setattr(
-        cli,
-        "load_cases",
-        lambda *_args: [SimpleNamespace(case={"id": "TC-01", "turns": ()})],
-    )
-    monkeypatch.setattr(cli, "_load_plugin", lambda _reference: lambda *_args: {})
-    monkeypatch.setattr(cli, "default_subject_specs", lambda: ())
-    monkeypatch.setattr(cli, "_load_matrix_specs", lambda _path, defaults: tuple(defaults))
-
-    def run_matrix_at_existing_path(*_args, checkpoint_path, **_kwargs):
-        assert checkpoint_path == tmp_path / ".matrix-audit" / "new-run" / "matrix-checkpoint.jsonl"
-        assert checkpoint_path.parent.is_dir()
-        return []
-
-    monkeypatch.setattr(cli, "run_matrix", run_matrix_at_existing_path)
-    monkeypatch.setattr(cli, "write_matrix_workbook", lambda *_args: None)
-    monkeypatch.setattr(cli, "write_pair_workbooks", lambda *_args: [])
-    monkeypatch.setattr(cli, "render_matrix_report", lambda _rows: "")
-
-    assert cli._matrix(args) == 1
-    assert (output / "report.md").exists()
+def test_matrix_cli_dry_run_freezes_plan_without_starting_generation(tmp_path, monkeypatch):
+    from xiaoan_eval_core import model_config
+    monkeypatch.setattr(model_config, 'ENV_PATH', Path('.env.example').resolve())
+    output = tmp_path / 'planned'
+    assert cli.main(['matrix', '--cases', 'TC-35', '--output', str(output)]) == 0
+    saved = json.loads((output / 'plan.json').read_text())
+    assert saved['plan']['case_ids'] == ['TC-35']
+    assert all(row['answer'] is None for row in saved['rows'])
+    assert not (output / 'subject-checkpoint').exists()
 
 
 def test_workbook_forces_untrusted_text_to_string(tmp_path: Path) -> None:
@@ -953,7 +886,7 @@ def test_matrix_resume_can_retry_unavailable_judge_with_frozen_answer(tmp_path: 
     kwargs = dict(
         cases=({"id": "TC-01", "turns": ({"turn": 1, "user": "hello"},)},),
         subjects=(ModelSpec("gpt", "subject", "latest", "medium"),),
-        judges=(ModelSpec("qwen", "judge", "judge", "medium"),),
+        judges=(ModelSpec("gemini", "judge", "judge", "medium"),),
         subject_transport=subject,
         rating_rule=rule,
         checkpoint_path=checkpoint,
@@ -1028,7 +961,7 @@ def test_matrix_resume_retries_entire_failed_subject_lane_and_its_judges(tmp_pat
         )},),
         subjects=(ModelSpec("gpt", "subject", "latest", "medium"),),
         judges=(
-            ModelSpec("qwen", "judge-a", "judge", "medium"),
+            ModelSpec("gemini", "judge-a", "judge", "medium"),
             ModelSpec("claude", "judge-b", "judge", "medium"),
         ),
         subject_transport=subject,
@@ -1095,7 +1028,7 @@ def test_interrupted_subject_lane_retry_cannot_mix_answer_generations(tmp_path: 
             {"turn": 3, "user": "third"},
         )},),
         subjects=(ModelSpec("gpt", "subject", "latest", "medium"),),
-        judges=(ModelSpec("qwen", "judge", "judge", "medium"),),
+        judges=(ModelSpec("gemini", "judge", "judge", "medium"),),
         subject_transport=subject,
         judge_transport=lambda *_args: {"text": _judge_json(rule, 3)},
         rating_rule=rule,

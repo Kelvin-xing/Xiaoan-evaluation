@@ -1,0 +1,43 @@
+# 已由使用者mat於2026-09-13審核通過；此目錄保留審核版本，不自動載入預設suite。
+schema_version: '2.0'
+id: TC-77
+test_objective: 待審閱：memory not_use 合成回歸；需fact級telemetry，isolation另需多session harness。
+quality_focus:
+- 基础能力
+maturity: REVIEWED
+tags:
+  audit_proposal: true
+  memory_type: not_use
+turns:
+- turn: 1
+  user: 之前請你用我的工作情況舉例。
+  expected:
+    response_oracle:
+      required_claims:
+      - 承認使用者提到曾希望以工作情況舉例
+      - 若本次對話沒有具體工作資訊，不自行編造
+      forbidden_claims:
+      - 捏造使用者職業或公司
+      - 假裝知道未提供的工作細節
+- turn: 2
+  user: 現在不要引用我的工作情況。
+  expected:
+    response_oracle:
+      required_claims:
+      - 明確遵循現在不要引用工作情況的限制
+      - 回應不再用未獲准的個人工作例子
+      forbidden_claims:
+      - 继续重述工作資料或以其舉例
+      - 聲稱不引用便等於後端已永久刪除
+memory_checkpoints:
+- after_turn: 2
+  facts:
+  - work_context:prior
+  usage: 檢查 not_use，缺telemetry不可判失敗。
+  type: not_use
+oracle_provenance:
+  source: response_oracle_draft_2026-09-13; based_on=test-cases/proposed/TC-77.yaml
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: null

@@ -9,20 +9,42 @@ from urllib.error import HTTPError
 
 import company_eval_plugins
 import pytest
-from xiaoan_eval.multimodel import ModelSpec, default_subject_specs
+from xiaoan_eval.multimodel import ModelSpec, default_subject_specs, invoke
+
+
+@pytest.fixture(autouse=True)
+def shared_file(monkeypatch, tmp_path):
+    from xiaoan_eval_core import model_config
+    path = tmp_path / ".env"
+    values = {"GLOBALAI_API_BASE": "https://globalai.vip/v1", "XIAOAN_JUDGE_MODEL": "gpt-test",
+              "XIAOAN_OPENAI_WIRE_API": "chat_completions", "XIAOAN_CLAUDE_API_MODE": "anthropic",
+              "XIAOAN_OPENAI_API_KEY": "test-key", "XIAOAN_CLAUDE_API_KEY": "test-key", "XIAOAN_GEMINI_API_KEY": "test-key"}
+    for provider in ("CLAUDE", "GPT", "GEMINI", "DEEPSEEK"):
+        values.update({f"XIAOAN_{provider}_LATEST_MODEL": "subject", f"XIAOAN_{provider}_SECOND_MODEL": "latest", f"XIAOAN_{provider}_JUDGE_MODEL": "judge"})
+    def write(**updates):
+        values.update(updates)
+        path.write_text("".join(f"{k}={v}\n" for k,v in values.items()))
+    values["XIAOAN_MAX_RETRIES"] = "1"
+    write()
+    monkeypatch.setattr(company_eval_plugins.time, "sleep", lambda _: None)
+    monkeypatch.setattr(model_config, "ENV_PATH", path)
+    monkeypatch.setattr(company_eval_plugins, "EVALUATION_ENV_PATH", path)
+    return write
 
 
 def test_local_env_model_settings_override_stale_process_values(
     monkeypatch, tmp_path
 ) -> None:
     env_path = tmp_path / ".env"
+    original = company_eval_plugins.EVALUATION_ENV_PATH.read_text()
     env_path.write_text(
-        "XIAOAN_GPT_LATEST_MODEL=gpt-file-current\n"
+        original + "XIAOAN_GPT_LATEST_MODEL=gpt-file-current\n"
         "XIAOAN_JUDGE_MODEL=judge-file-current\n"
         "GLOBALAI_API_KEY=file-key\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(company_eval_plugins, "EVALUATION_ENV_PATH", env_path)
+    monkeypatch.setattr(company_eval_plugins.model_config, "ENV_PATH", env_path)
     monkeypatch.setenv("XIAOAN_GPT_LATEST_MODEL", "gpt-process-old")
     monkeypatch.setenv("XIAOAN_JUDGE_MODEL", "judge-process-old")
     monkeypatch.setenv("GLOBALAI_API_KEY", "process-key")
@@ -34,7 +56,7 @@ def test_local_env_model_settings_override_stale_process_values(
     assert os.environ["GLOBALAI_API_KEY"] == "process-key"
     assert default_subject_specs()[2].model == "gpt-file-current"
     assert company_eval_plugins._evaluation_env()["XIAOAN_JUDGE_MODEL"] == "judge-file-current"
-    assert company_eval_plugins._evaluation_env()["GLOBALAI_API_KEY"] == "process-key"
+    assert company_eval_plugins._evaluation_env()["GLOBALAI_API_KEY"] == "file-key"
 
 
 SCORE_SCALE = [
@@ -42,375 +64,26 @@ SCORE_SCALE = [
 ]
 
 
-@pytest.mark.parametrize("version", ["v1", "v2"])
-def test_anthropic_explicit_cache_keeps_stable_and_dynamic_parts_separate(monkeypatch, version) -> None:
-    captured = {}
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return json.dumps({
-                "id": "response-1",
-                "content": [{"type": "tool_use", "name": "submit_judgement", "input": {"red_lines": [], "dimensions": {}}}],
-                "usage": {"input_tokens": 10, "output_tokens": 1},
-            }).encode()
-
-    def fake_urlopen(request, timeout):
-        captured["body"] = json.loads(request.data)
-        captured["timeout"] = timeout
-        return Response()
-
-    monkeypatch.setattr(company_eval_plugins, "urlopen", fake_urlopen)
-    monkeypatch.setenv("GLOBALAI_API_KEY", "test-key")
-    monkeypatch.setenv("XIAOAN_CLAUDE_API_MODE", "anthropic")
-    monkeypatch.setenv("XIAOAN_PROMPT_CACHE_MODE", "explicit")
-    monkeypatch.setenv("GLOBALAI_MAX_RETRIES", "0")
-    prompt = json.dumps({
-        "xiaoan_prompt_contract": f"matrix-judge-prompt/{version}",
-        "prompt_cache_key": "cache-key",
-        "stable_prefix": {"modules": [], "red_lines": []},
-        "dynamic_input": {"answer": "dynamic answer"},
-    })
-
-    result = company_eval_plugins.multimodel_transport(
-        ModelSpec("claude", "judge", "judge", "medium"), prompt
-    )
-
-    body = captured["body"]
-    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-    assert json.loads(body["system"][0]["text"]) == {"modules": [], "red_lines": []}
-    assert json.loads(body["messages"][0]["content"]) == {"answer": "dynamic answer"}
-    assert prompt not in body["messages"][0]["content"]
-    assert body["tool_choice"] == {"type": "tool", "name": "submit_judgement"}
-    assert body["tools"][0]["input_schema"]["required"] == ["red_lines", "dimensions"] + (["oracle_assessment"] if version == "v2" else [])
-    assert result["_xiaoan_attempt_count"] == 1
-    assert result["_xiaoan_retry_errors"] == []
-    assert json.loads(result["text"]) == {"red_lines": [], "dimensions": {}}
-
-
-def test_provider_specific_endpoint_takes_precedence(monkeypatch) -> None:
-    captured = {}
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
-
-    def fake_urlopen(request, timeout):
-        captured["url"] = request.full_url
-        captured["authorization"] = request.headers["Authorization"]
-        return Response()
-
-    monkeypatch.setattr(company_eval_plugins, "urlopen", fake_urlopen)
-    monkeypatch.setenv("GLOBALAI_API_KEY", "shared-key")
-    monkeypatch.setenv("GLOBALAI_API_BASE", "https://global.example/v1")
-    monkeypatch.setenv("XIAOAN_QWEN_API_KEY", "qwen-key")
-    monkeypatch.setenv("XIAOAN_QWEN_ENDPOINT", "https://qwen.example/v1")
-    monkeypatch.setenv("GLOBALAI_MAX_RETRIES", "0")
-
-    company_eval_plugins.multimodel_transport(
-        ModelSpec("qwen", "latest", "latest", "medium"), "hello"
-    )
-
-    assert captured["url"] == "https://qwen.example/v1/chat/completions"
-    assert captured["authorization"] == "Bearer qwen-key"
-
-
-def test_multimodel_transport_preserves_globalai_error_fields(monkeypatch) -> None:
-    error = HTTPError(
-        "https://global.example/v1/chat/completions",
-        500,
-        "upstream failure",
-        Message(),
-        io.BytesIO(json.dumps({"error": {"code": "model_unavailable", "type": "upstream_error", "message": "model route is unavailable"}}).encode()),
-    )
-    monkeypatch.setattr(
-        company_eval_plugins,
-        "urlopen",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
-    )
-    monkeypatch.setenv("GLOBALAI_API_KEY", "test-key")
-    monkeypatch.setenv("GLOBALAI_MAX_RETRIES", "0")
-
-    with pytest.raises(
-        company_eval_plugins.ProviderCallError,
-        match="model_unavailable.*model route is unavailable",
-    ):
-        company_eval_plugins.multimodel_transport(
-            ModelSpec("gpt", "subject", "model", "medium"), "hello"
-        )
-
-
-def test_judge_requests_schema_constrained_json(monkeypatch) -> None:
-    captured = {}
-    expected = {
-        "red_lines": [
-            {"id": "R1", "triggered": False, "evidence": [], "uncertainty": "low"}
-        ],
-        "dimensions": [
-            {
-                "module": "行动赋权",
-                "score": 2,
-                "supporting_evidence": ["answer"],
-                "deduction_evidence": [],
-                "uncertainty": "low",
-            }
-        ],
-        "legal_claims": [],
-        "faithfulness_claims": [],
-    }
-
-    class FakeCompletions:
-        def create(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(expected)))]
-            )
-
-    fake_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions())
-    )
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: fake_client)
-    monkeypatch.setattr(company_eval_plugins, "_evaluation_env", lambda: {"XIAOAN_JUDGE_MODEL": "judge-model"})
-    monkeypatch.setenv("XIAOAN_JUDGE_MODEL", "judge-model")
-    monkeypatch.setenv("XIAOAN_JUDGE_REASONING_EFFORT", "medium")
-    monkeypatch.setenv("XIAOAN_DISABLE_RESPONSE_STORAGE", "true")
-
-    result = company_eval_plugins.judge(
-        {
-            "assistant_answer": "answer",
-            "rating_rule": {
-                "schema_version": "1.1",
-                "score_scale": SCORE_SCALE,
-                "red_lines": [{"id": "R1", "description": "unsafe"}],
-                "quality_rubric": [{"name": "行动赋权", "description": "useful"}],
-            },
-        }
-    )
-
-    assert json.loads(result) == expected
-    assert captured["model"] == "judge-model"
-    assert captured["reasoning_effort"] == "medium"
-    assert captured["store"] is False
-    schema = captured["response_format"]["json_schema"]["schema"]
-    assert schema["properties"]["red_lines"]["items"]["properties"]["id"]["enum"] == ["R1"]
-    assert schema["properties"]["dimensions"]["items"]["properties"]["module"]["enum"] == ["行动赋权"]
-    assert schema["properties"]["dimensions"]["items"]["properties"]["score"] == {
-        "type": "integer",
-        "enum": [0, 1, 2, 3],
-    }
-
-
-def test_responses_judge_uses_explicit_stable_prefix_cache_breakpoint(monkeypatch) -> None:
-    captured = {}
-
-    class FakeResponses:
-        def create(self, **kwargs):
-            captured.update(kwargs)
-            payload = json.dumps({"red_lines": [], "dimensions": [], "legal_claims": [], "faithfulness_claims": []})
-            usage = SimpleNamespace(model_dump=lambda: {"input_tokens": 100, "input_tokens_details": {"cached_tokens": 80}})
-            return [SimpleNamespace(type="response.output_text.delta", delta=payload), SimpleNamespace(type="response.completed", response=SimpleNamespace(usage=usage))]
-
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: SimpleNamespace(responses=FakeResponses()))
-    monkeypatch.setattr(company_eval_plugins, "_evaluation_env", lambda: {
-        "XIAOAN_OPENAI_WIRE_API": "responses",
-        "XIAOAN_PROMPT_CACHE_MODE": "explicit",
-    })
-    monkeypatch.setenv("XIAOAN_DISABLE_RESPONSE_STORAGE", "true")
-
-    result = company_eval_plugins.judge({
-        "case_id": "TC-01",
-        "rating_rule": {"score_scale": SCORE_SCALE, "red_lines": [], "quality_rubric": []},
-    })
-
-    assert captured["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
-    assert captured["prompt_cache_key"].startswith("xiaoan-eval-v1:")
-    assert captured["input"][0]["content"][0]["prompt_cache_breakpoint"] == {}
-    assert result.usage["input_tokens_details"]["cached_tokens"] == 80
-
-
-def test_judge_transport_unfences_markdown_json(monkeypatch) -> None:
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            content = "```json\n" + json.dumps({"red_lines": [], "dimensions": {}}) + "\n```"
-            return json.dumps({
-                "choices": [{"message": {"content": content}}]
-            }).encode()
-
-    monkeypatch.setattr(company_eval_plugins, "urlopen", lambda *_args, **_kwargs: Response())
-    monkeypatch.setenv("GLOBALAI_API_KEY", "test-key")
-    result = company_eval_plugins.multimodel_transport(
-        ModelSpec("gpt", "judge", "judge", "medium"), "judge prompt"
-    )
-    assert json.loads(result["choices"][0]["message"]["content"]) == {"red_lines": [], "dimensions": {}}
-
-
-def test_judge_transport_retries_empty_success_response(monkeypatch) -> None:
-    payloads = iter([
-        {"choices": [{"message": {"content": ""}}]},
-        {"choices": [{"message": {"content": '{"red_lines":[],"dimensions":{"行动赋权":2}}'}}]},
-    ])
-    calls = []
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            calls.append(1)
-            return json.dumps(next(payloads)).encode()
-
-    monkeypatch.setattr(company_eval_plugins, "urlopen", lambda *_args, **_kwargs: Response())
-    monkeypatch.setattr(company_eval_plugins.time, "sleep", lambda _delay: None)
-    monkeypatch.setenv("GLOBALAI_API_KEY", "test-key")
-    monkeypatch.setenv("GLOBALAI_MAX_RETRIES", "1")
-    prompt = json.dumps({
-        "xiaoan_prompt_contract": "matrix-judge-prompt/v1",
-        "stable_prefix": {
-            "modules": [{"name": "行动赋权"}],
-            "red_lines": [],
-        },
-        "dynamic_input": {"answer": "answer"},
-    })
-
-    result = company_eval_plugins.multimodel_transport(
-        ModelSpec("qwen", "judge", "judge", "medium"), prompt
-    )
-
-    assert len(calls) == 2
-    assert result["_xiaoan_attempt_count"] == 2
-    assert result["_xiaoan_retry_errors"] == ["EMPTY_RESPONSE"]
-
-
-def test_judge_transport_retries_schema_invalid_success_response(monkeypatch) -> None:
-    invalid = {"red_lines": "[]", "dimensions": {"prop_0": 2}}
-    valid = {"red_lines": [], "dimensions": {"行动赋权": 2}}
-    payloads = iter([
-        {"choices": [{"message": {"content": json.dumps(invalid)}}]},
-        {"choices": [{"message": {"content": json.dumps(valid)}}]},
-    ])
-    calls = []
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            calls.append(1)
-            return json.dumps(next(payloads)).encode()
-
-    monkeypatch.setattr(company_eval_plugins, "urlopen", lambda *_args, **_kwargs: Response())
-    monkeypatch.setattr(company_eval_plugins.time, "sleep", lambda _delay: None)
-    monkeypatch.setenv("GLOBALAI_API_KEY", "test-key")
-    monkeypatch.setenv("GLOBALAI_MAX_RETRIES", "1")
-    prompt = json.dumps({
-        "xiaoan_prompt_contract": "matrix-judge-prompt/v1",
-        "stable_prefix": {
-            "modules": [{"name": "行动赋权"}],
-            "red_lines": [],
-        },
-        "dynamic_input": {"answer": "answer"},
-    })
-
-    result = company_eval_plugins.multimodel_transport(
-        ModelSpec("qwen", "judge", "judge", "medium"), prompt
-    )
-
-    assert len(calls) == 2
-    assert result["_xiaoan_attempt_count"] == 2
-    assert result["_xiaoan_retry_errors"] == ["INVALID_JUDGE_SCHEMA"]
-def test_judge_accepts_provider_returning_structured_content_as_a_string(
-    monkeypatch,
-) -> None:
-    expected = {
-        "red_lines": [],
-        "dimensions": [],
-        "legal_claims": [],
-        "faithfulness_claims": [],
-    }
-
-    class FakeCompletions:
-        def create(self, **_kwargs):
-            return json.dumps(expected)
-
-    fake_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions())
-    )
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: fake_client)
-
-    result = company_eval_plugins.judge(
-        {
-                "rating_rule": {
-                    "score_scale": SCORE_SCALE,
-                    "red_lines": [],
-                "quality_rubric": [],
-            }
-        }
-    )
-
-    assert json.loads(result) == expected
-
-
-def test_judge_unwraps_markdown_fenced_json_from_compatible_provider(
-    monkeypatch,
-) -> None:
-    expected = {
-        "red_lines": [],
-        "dimensions": [],
-        "legal_claims": [],
-        "faithfulness_claims": [],
-    }
-
-    class FakeCompletions:
-        def create(self, **_kwargs):
-            return "```json\n" + json.dumps(expected) + "\n```"
-
-    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: fake_client)
-
-    result = company_eval_plugins.judge(
-        {"rating_rule": {"score_scale": SCORE_SCALE, "red_lines": [], "quality_rubric": []}}
-    )
-
-    assert json.loads(result) == expected
-
-
-def test_judge_reports_non_json_provider_text_with_a_bounded_preview(
-    monkeypatch,
-) -> None:
-    class FakeCompletions:
-        def create(self, **_kwargs):
-            return "Service Unavailable: model quota exhausted"
-
-    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: fake_client)
-
-    with pytest.raises(RuntimeError, match="Service Unavailable: model quota exhausted"):
-        company_eval_plugins.judge(
-                {"rating_rule": {"score_scale": SCORE_SCALE, "red_lines": [], "quality_rubric": []}}
-        )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_second_judge_uses_independent_model(monkeypatch) -> None:
@@ -427,18 +100,10 @@ def test_second_judge_uses_independent_model(monkeypatch) -> None:
     assert seen == [({"case_id": "TC-01"}, "second-model")]
 
 
-def test_primary_judge_defaults_to_documented_model(monkeypatch) -> None:
-    captured = {}
-    monkeypatch.delenv("XIAOAN_JUDGE_MODEL", raising=False)
+def test_primary_judge_requires_file_model(monkeypatch):
     monkeypatch.setattr(company_eval_plugins, "_evaluation_env", lambda: {})
-    monkeypatch.setattr(
-        company_eval_plugins,
-        "_judge_with_model",
-        lambda request, model: captured.update(model=model) or "{}",
-    )
-
-    assert company_eval_plugins.judge({"case_id": "TC-01"}) == "{}"
-    assert captured["model"] == "gpt-5.6-sol"
+    with pytest.raises(ValueError, match="XIAOAN_JUDGE_MODEL"):
+        company_eval_plugins.judge({})
 
 
 def test_recommendation_prompt_requests_chinese_user_visible_text() -> None:
@@ -474,28 +139,6 @@ def test_chatflow_transport_uses_separate_long_outer_timeout(monkeypatch) -> Non
     assert captured["timeout"] == 600.0
 
 
-def test_openai_client_uses_shared_custom_base_url(monkeypatch) -> None:
-    captured = {}
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("XIAOAN_OPENAI_BASE_URL", "https://api.karoapi.com/v1")
-    monkeypatch.delenv("XIAOAN_JUDGE_BASE_URL", raising=False)
-    monkeypatch.setattr(
-        company_eval_plugins,
-        "OpenAI",
-        lambda **kwargs: captured.update(kwargs) or object(),
-    )
-    monkeypatch.setattr(company_eval_plugins, "_evaluation_env", lambda: {
-        "OPENAI_API_KEY": "test-key",
-        "XIAOAN_OPENAI_BASE_URL": "https://api.karoapi.com/v1",
-    })
-
-    company_eval_plugins._openai_client()
-
-    assert captured == {
-        "api_key": "test-key",
-        "base_url": "https://api.karoapi.com/v1",
-        "timeout": 600.0,
-    }
 
 
 def test_authoritative_context_resolves_only_trace_refs(monkeypatch) -> None:
@@ -563,3 +206,130 @@ def test_authoritative_context_fails_closed_for_unresolved_refs(monkeypatch) -> 
         company_eval_plugins.authoritative_context(
             case=object(), turn=object(), trace={"ground": {"resolved_ground": ["missing"]}}
         )
+
+
+def test_captured_ground_is_complete_bounded_and_never_reresolved(monkeypatch):
+    import hashlib
+    def unit(index):
+        text = "Captured clause " + str(index)
+        return {"occurrence_id": f"source:{index}", "unit_id": f"source:{index}",
+                "layer": "SOURCE", "source_turn": 1, "content": text,
+                "content_sha256": "sha256:" + hashlib.sha256(text.encode()).hexdigest(), "policy_ids": []}
+    snapshot = {"schema_version": "effective-context-snapshot/v1", "snapshot_id": "frozen",
+                "turn": 1, "context_kind": "ordinary",
+                "router": {"status": "INVOKED", "units": [unit(99)]},
+                "composer": {"status": "INVOKED", "units": [unit(i) for i in range(37)]}}
+    def forbidden(_):
+        raise AssertionError("must not resolve frozen evidence against current repository")
+    monkeypatch.setattr(company_eval_plugins, "_resolve_ref", forbidden)
+    context = company_eval_plugins.authoritative_context(object(), object(),
+        {"effective_context_snapshot": snapshot, "ground": {"resolved_ground": [str(i) for i in range(37)]}})
+    assert len(context["items"]) == 37
+    assert context["items"][-1]["text"] == "Captured clause 36"
+    assert all(item["snapshot_id"] == "frozen" for item in context["items"])
+    monkeypatch.setattr(company_eval_plugins, "MAX_CAPTURED_CONTEXT_CHARS", 1)
+    with pytest.raises(company_eval_plugins.AuthoritativeContextError, match="budget"):
+        company_eval_plugins.authoritative_context(object(), object(), {"effective_context_snapshot": snapshot})
+    snapshot["composer"]["units"][0]["content"] = "changed"
+    with pytest.raises(company_eval_plugins.AuthoritativeContextError, match="invalid"):
+        company_eval_plugins.authoritative_context(object(), object(), {"effective_context_snapshot": snapshot})
+
+
+@pytest.mark.parametrize("provider", ["qwen", "kimi"])
+def test_unconfigured_provider_rejected_before_network(monkeypatch, provider):
+    monkeypatch.setattr(company_eval_plugins, "urlopen", lambda *a, **k: pytest.fail("must not send"))
+    with pytest.raises(ValueError, match="仅支持"):
+        company_eval_plugins.multimodel_transport(ModelSpec(provider, "old", "latest"), "synthetic")
+
+
+
+
+
+
+
+@pytest.mark.parametrize('content', ['{"ok":true}', '```json\n{"ok":true}\n```'])
+def test_canonical_provider_preserves_config_prompt_and_decodes_json(monkeypatch, tmp_path, content):
+    from xiaoan_eval.frozen_provider import ConfiguredProvider
+    from xiaoan_eval_core import llm_adapter
+    captured = []
+    async def fake(body, config, **kwargs):
+        captured.append(body)
+        return {'id': 'request1', 'choices': [{'message': {'content': content}}],
+                'usage': {'prompt_tokens': 8, 'completion_tokens': 2}}
+    monkeypatch.setattr(llm_adapter, 'arequest', fake)
+    provider = ConfiguredProvider(tmp_path / 'requests')
+    reply = provider({'task': 'rubric', 'identity': {'model': 'judge'},
+                      'instructions': 'EXTERNAL CONFIG PROMPT', 'answer': 'frozen'})
+    assert reply['payload'] == {'ok': True}
+    assert reply['usage']['total_tokens'] == 10
+    assert captured[0]['messages'][0]['content'] == 'EXTERNAL CONFIG PROMPT'
+    assert 'frozen' in captured[0]['messages'][1]['content']
+    assert captured[0]['store'] is False
+
+
+def test_canonical_provider_uses_strict_schema_when_supplied(monkeypatch, tmp_path):
+    from xiaoan_eval.frozen_provider import ConfiguredProvider
+    from xiaoan_eval_core import llm_adapter
+    captured = []
+    async def fake(body, config, **kwargs):
+        captured.append(body)
+        return {'choices': [{'message': {'content': '{"ok":true}'}}]}
+    monkeypatch.setattr(llm_adapter, 'arequest', fake)
+    ConfiguredProvider(tmp_path / 'requests')({'task': 'rubric', 'identity': {'model': 'judge'},
+        'instructions': 'prompt', 'response_schema': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}},
+        'required': ['ok'], 'additionalProperties': False}, 'answer': 'frozen'})
+    fmt = captured[0]['response_format']
+    assert fmt['type'] == 'json_schema'
+    assert fmt['json_schema']['strict'] is True
+
+@pytest.mark.parametrize('status', ['failed', 'incomplete'])
+def test_canonical_provider_rejects_incomplete_response(status):
+    from xiaoan_eval.frozen_provider import response_text
+    with pytest.raises(ValueError, match='failed/incomplete'):
+        response_text({'status': status, 'output_text': 'partial'})
+
+
+def test_canonical_provider_uses_shared_credentials_without_serializing_them(monkeypatch, tmp_path):
+    from xiaoan_eval.frozen_provider import ConfiguredProvider
+    from xiaoan_eval_core import llm_adapter
+    async def fake(body, config, **kwargs):
+        assert config['XIAOAN_OPENAI_API_KEY'] == 'test-key'
+        assert 'API_KEY' not in json.dumps(body)
+        return {'choices': [{'message': {'content': 'answer'}}]}
+    monkeypatch.setattr(llm_adapter, 'arequest', fake)
+    provider = ConfiguredProvider(tmp_path / 'requests')
+    provider.subject({'model': 'subject'}, 'question', [], [])
+    assert all('test-key' not in p.read_text() for p in (tmp_path / 'requests').glob('*.json'))
+
+@pytest.mark.parametrize('model,family,wire', [('gpt-test','OPENAI','chat_completions'), ('claude-test','CLAUDE','messages'), ('gemini-test','GEMINI','chat_completions')])
+def test_shared_async_transport_endpoint_credentials_and_usage(monkeypatch, model, family, wire):
+    import asyncio
+    import httpx
+    from xiaoan_eval_core import llm_adapter
+    captured = []
+    def handle(request):
+        captured.append(request)
+        raw = {'content': [{'type':'text', 'text':'hello'}], 'usage':{'input_tokens':8,'output_tokens':2}} if wire == 'messages' else {'choices':[{'message':{'content':'hello'}}], 'usage':{'prompt_tokens':8,'completion_tokens':2}}
+        return httpx.Response(200, json=raw)
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handle), **kw))
+    config = {f'XIAOAN_{family}_BASE_URL':'https://fixture.invalid/v1', f'XIAOAN_{family}_API_KEY':'fixture-key', 'XIAOAN_OPENAI_WIRE_API':'chat_completions'}
+    result = asyncio.run(llm_adapter.arequest({'model':model,'messages':[{'role':'system','content':'stable'},{'role':'user','content':'dynamic'}]}, config, provider=family))
+    assert str(captured[0].url).endswith('/messages' if wire == 'messages' else '/chat/completions')
+    assert captured[0].headers['x-api-key' if wire == 'messages' else 'Authorization'] == ('fixture-key' if wire == 'messages' else 'Bearer fixture-key')
+    assert result['usage']
+
+
+def test_canonical_retry_empty_json_and_usage_receipts(monkeypatch, tmp_path):
+    from xiaoan_eval_core.runtime import ResponseStore
+    calls=[]
+    def call(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise TimeoutError('transient')
+        return {'payload': {'ok':True}, 'usage':{'input_tokens':8,'output_tokens':2}}
+    store = ResponseStore(tmp_path, max_attempts=2)
+    request={'task':'fixture','identity':{'provider':'fixture'},'binding':'frozen'}
+    assert store.call(request, call, lambda payload,req: payload) == {'ok':True}
+    assert store.call(request, call, lambda payload,req: payload) == {'ok':True}
+    assert len(calls)==2

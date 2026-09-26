@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from typing import Any, Mapping, Sequence
 
 
@@ -111,6 +112,7 @@ def _normalize_runtime_invocation(value: Any, name: str, turn: int) -> Mapping[s
     if status is None:
         raise SnapshotValidationError(f"unsupported runtime invocation status: {raw_status}")
     units = []
+    history_turns = _runtime_history_turns(invocation, name, turn) if status == "INVOKED" else {}
     if status == "INVOKED":
         for index, raw in enumerate(invocation.get("context_units", ())):
             item = _mapping(raw, f"snapshot.invocations.{name}.context_units[{index}]")
@@ -141,12 +143,39 @@ def _normalize_runtime_invocation(value: Any, name: str, turn: int) -> Mapping[s
                 "occurrence_id": str(item.get("ref")),
                 "unit_id": str(item.get("item_id") or item.get("field_path")),
                 "layer": item.get("layer"),
-                "source_turn": turn,
+                "source_turn": history_turns.get(str(item.get("ref")), turn),
                 "content": content,
                 "content_sha256": "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest(),
                 "policy_ids": policy_ids,
             })
     return {"status": status, "units": units, "reason": invocation.get("reason") or None}
+
+
+def _runtime_history_turns(invocation: Mapping[str, Any], name: str, turn: int) -> dict[str, int]:
+    """Chatflow v1 Router and Composer emit a chronological suffix of completed turns.
+
+    Its history/N/role N is window-relative, not an absolute turn. Align that
+    suffix to snapshot.turn; never promote Router history into Composer evidence.
+    Unknown layouts fail closed instead of assigning historical text to now.
+    """
+    indexed = []
+    for item in invocation.get("context_units", ()):
+        if not isinstance(item, Mapping) or item.get("inclusion_state") != "EXPOSED" or item.get("layer") not in PRIOR_LAYERS:
+            continue
+        ref = str(item.get("ref"))
+        match = re.fullmatch(rf"(?:{name}:)?history/(\d+)/(user|assistant)", ref)
+        if name not in {"router", "composer"} or match is None:
+            raise SnapshotValidationError("unbound runtime history reference")
+        index, role = int(match[1]), match[2]
+        if item.get("entity_id") != f"history:{index}" or item.get("item_id") != f"{index}:{role}" or item.get("field_path") != role or item.get("layer") != {"user":"PRIOR_USER", "assistant":"PRIOR_ASSISTANT"}[role]:
+            raise SnapshotValidationError("runtime history identity mismatch")
+        indexed.append((ref, index))
+    indices = {index for _, index in indexed}
+    if not indices:
+        return {}
+    if indices != set(range(len(indices))) or len(indices) >= turn:
+        raise SnapshotValidationError("runtime history window is not a valid completed-turn suffix")
+    return {ref: turn - len(indices) + index for ref, index in indexed}
 
 
 def build_evidence_catalog(

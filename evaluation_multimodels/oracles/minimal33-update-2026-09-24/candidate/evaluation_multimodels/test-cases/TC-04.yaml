@@ -1,0 +1,776 @@
+schema_version: '2.0'
+id: TC-04
+user_variable: 成年女性
+test_objective: '验证模型能否进行稳定的情绪识别与提问引导，语气温暖、对用户记忆线索进行有效跟随，并在后续建议中形成连贯支持。
+
+  '
+quality_focus:
+- 基础能力
+- 表达能力
+category: null
+tags:
+  reference_oracle_revision: case-reference-oracle/v1
+turns:
+- turn: 1
+  user: 我叫小梅，住在沙坪镇，没有工作，但有一只可爱的金毛犬，最近半年他经常打我，我不知道该怎么办。
+  expected:
+    capsule_ids: &id001
+    - nc
+    - n3
+    - n1
+    response_oracle:
+      required_claims:
+      - 半年反覆挨打不是小梅的錯
+      - 先確認當下安全再了解最迫切需要
+      forbidden_claims:
+      - 把沙坪鎮臆測成確定城市並編造本地機構
+      - 要求立刻放棄寵物離開
+    route_ids: *id001
+    preferred_route_id: nc
+    safety_levels:
+    - normal
+    wiki_refs: []
+    source_refs: []
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: reviewed
+      reviewed_by: user
+      reviewed_at: '2026-09-24'
+      authored_by: codex
+      authored_at: '2026-09-23'
+      snapshot_id: sha256:c129f16a496ba07b46ffa27fc59c80ae9cd243a3952c471e294b072a8325e51e
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 半年反复受暴但未明确正在受袭，先评估当前安全
+      route_contracts:
+        nc:
+          capsule_ref: content/capsule/NC 热暴力求助.md
+          ground_ref: content/capsule/NC 热暴力求助.md#ground
+          answer_section_refs:
+          - content/capsule/NC 热暴力求助.md#applicability
+          - content/capsule/NC 热暴力求助.md#render_policy
+          - content/capsule/NC 热暴力求助.md#recognize
+          - content/capsule/NC 热暴力求助.md#act
+          configured_ground_node_ids:
+          - domestic-violence-scope
+          - protection-order
+          - protection-order-evidence
+          - police-response-and-investigation
+          - help-and-reporting-paths
+          - legal-aid-and-procedural-support
+          ground_branches:
+          - condition: 用户询问什么行为构成家庭暴力
+            node_id: domestic-violence-scope
+            source_roles:
+            - legal_basis
+          - condition: 用户询问为什么反复、控制和非身体伤害也需要被认真识别
+            node_id: domestic-violence-scope
+            source_roles:
+            - legal_basis
+            - doctrinal_foundation
+          - condition: 用户询问如何申请人身安全保护令预防下次暴力
+            node_id: protection-order
+            source_roles:
+            - legal_basis
+          - condition: 用户询问保护令申请需要什么证据
+            node_id: protection-order-evidence
+            source_roles:
+            - legal_basis
+          - condition: 用户询问报警后警方应该做什么
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问什么是告诫书以及如何获得
+            node_id: police-response-and-investigation
+            source_roles:
+            - legal_basis
+          - condition: 用户询问可以向哪些机构求助
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 用户询问是否有法律援助或庇护资源
+            node_id: legal-aid-and-procedural-support
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+        n3:
+          capsule_ref: content/capsule/N3 求助总览与分流.md
+          ground_ref: content/capsule/N3 求助总览与分流.md#ground
+          answer_section_refs:
+          - content/capsule/N3 求助总览与分流.md#applicability
+          - content/capsule/N3 求助总览与分流.md#render_policy
+          - content/capsule/N3 求助总览与分流.md#recognize
+          - content/capsule/N3 求助总览与分流.md#act
+          configured_ground_node_ids:
+          - help-and-reporting-paths
+          - protection-order
+          - family-law-relief
+          ground_branches:
+          - condition: 用户询问除了报警还有哪些求助渠道，或不同求助方式（投诉、求助、报警、起诉）是否需要按固定顺序进行
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 用户询问申请保护令或告诫书是否需要先报警或先提起离婚诉讼
+            node_id: protection-order
+            source_roles:
+            - legal_basis
+          - condition: 用户询问家暴是否构成法定离婚事由，或离婚时能否要求损害赔偿
+            node_id: family-law-relief
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+        n1:
+          capsule_ref: content/capsule/N1 识别暴力.md
+          ground_ref: content/capsule/N1 识别暴力.md#ground
+          answer_section_refs:
+          - content/capsule/N1 识别暴力.md#applicability
+          - content/capsule/N1 识别暴力.md#render_policy
+          - content/capsule/N1 识别暴力.md#act
+          configured_ground_node_ids:
+          - domestic-violence-scope
+          - cohabiting-person-scope
+          - post-relationship-harassment
+          - special-protection-groups
+          - sexual-violence-in-family-context
+          - jiangsu-domestic-violence-scope
+          ground_branches:
+          - condition: 用户询问身体暴力（殴打、捆绑、限制人身自由）或精神暴力（经常性谩骂、恐吓、冷战、跟踪骚扰、孤立社交）是否构成法律意义上的家庭暴力
+            node_id: domestic-violence-scope
+            source_roles:
+            - legal_basis
+          - condition: 用户询问为什么没有明显肢体伤害、但存在控制、隐蔽、反复发生的行为也应被认定为家暴
+            node_id: domestic-violence-scope
+            source_roles:
+            - legal_basis
+            - authoritative_commentary
+            - doctrinal_foundation
+          - condition: 用户询问共同生活但非夫妻血亲关系（如儿媳女婿、公婆岳父母，或其他有监护、扶养、寄养关系的人）之间的暴力是否算家暴
+            node_id: cohabiting-person-scope
+            source_roles:
+            - legal_basis
+          - condition: 用户询问恋爱关系、非同居伴侣，或分手/离婚后的纠缠骚扰行为是否属于《反家庭暴力法》意义上的家暴
+            node_id: post-relationship-harassment
+            source_roles:
+            - legal_basis
+          - condition: 用户是未成年人、老年人、残疾人、孕期哺乳期妇女或重病患者，询问是否有特殊保护
+            node_id: special-protection-groups
+            source_roles:
+            - legal_basis
+          - condition: 用户询问法院在类似情况下（长期语言暴力、限制社会交往、殴打叠加经济或就医控制）如何认定家暴
+            node_id: domestic-violence-scope
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户询问经济控制（扣押工资、身份证、限制消费、强迫上交收入）单独一项是否构成家庭暴力
+            node_id: domestic-violence-scope
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户询问家庭或亲密关系中被强迫发生性行为、没有明显反抗是否等于同意，或这种性侵害如何认定
+            node_id: sexual-violence-in-family-context
+            source_roles:
+            - legal_basis
+            - authoritative_commentary
+            - case_application
+          - condition: 用户明确表示相关行为发生在江苏省，并询问性侵害或经济控制是否属于家庭暴力
+            node_id: jiangsu-domestic-violence-scope
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+      ground:
+        activation: optional
+        required_node_ids: []
+        background_node_ids: []
+        background_source_refs: []
+        reason: 本轮无需依赖外部引文才可回应；按需加载或危机优先，不要求公开内部引用。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps: []
+      runtime_ground_gaps: {}
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - nc
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: reviewed
+        reviewer: user
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 半年反复受暴但未明确正在受袭，先评估当前安全
+        crisis_required: false
+        acceptable_routes: *id001
+        preferred_route: nc
+        allowed_alternatives:
+        - 先问当前危险或最迫切需要均可，之后再分流
+        review_issue: 不以不报警或未离开判失败；宠物是现实约束
+        response_candidate:
+          required_claims:
+          - 半年反覆挨打不是小梅的錯
+          - 先確認當下安全再了解最迫切需要
+          forbidden_claims:
+          - 把沙坪鎮臆測成確定城市並編造本地機構
+          - 要求立刻放棄寵物離開
+        response_amendments: []
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required: []
+        reviewed_at: '2026-09-24'
+      snapshot_scope: 当前content Markdown完整清单：evaluation_multimodels/oracles/source-snapshot-2026-09-23.json
+      previous_review:
+        status: reviewed
+        reviewed_by: mat
+        reviewed_at: '2026-09-22'
+        snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      revision_note: 当前内容引用合同重建；保留原回答oracle与原审核记录，新引用合同待审核，不自动批准aggregate。
+      review_basis: 用户于2026-09-24对已展示的Minimal33新版逐轮合同明确回复“接受”；接受其已披露的来源缺口与适用状态，不将缺口视为补齐，也不批准aggregate。
+      reviewed_snapshot_id: sha256:38a777c9f50a6a6054a05f5b22f44bc6f498400a825c2b802225f9be13acb4e1
+      technical_rebind:
+        authored_by: codex
+        date: '2026-09-24'
+        scope: 用户接受的路由/安全/必需来源标签不变；仅刷新内容快照及可配置分支清单
+        not_new_human_review: true
+- turn: 2
+  user: 我不知道该怎么办，很迷茫。
+  expected:
+    capsule_ids: &id002
+    - n3
+    - n7a
+    - k4
+    response_oracle:
+      required_claims:
+      - 接納迷茫並讓使用者選擇目前最需要的支持
+      - 提出一個小而可行的下一步
+      forbidden_claims:
+      - 因使用者重複說迷茫而責備
+      - 一次要求完成整套離婚搬家程序
+    route_ids: *id002
+    preferred_route_id: n3
+    safety_levels:
+    - normal
+    wiki_refs: []
+    source_refs: []
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: reviewed
+      reviewed_by: user
+      reviewed_at: '2026-09-24'
+      authored_by: codex
+      authored_at: '2026-09-23'
+      snapshot_id: sha256:c129f16a496ba07b46ffa27fc59c80ae9cd243a3952c471e294b072a8325e51e
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 迷茫与未明确目标，需要支持及澄清，不是新的即时危险
+      route_contracts:
+        n3:
+          capsule_ref: content/capsule/N3 求助总览与分流.md
+          ground_ref: content/capsule/N3 求助总览与分流.md#ground
+          answer_section_refs:
+          - content/capsule/N3 求助总览与分流.md#applicability
+          - content/capsule/N3 求助总览与分流.md#render_policy
+          - content/capsule/N3 求助总览与分流.md#recognize
+          - content/capsule/N3 求助总览与分流.md#act
+          configured_ground_node_ids:
+          - help-and-reporting-paths
+          - protection-order
+          - family-law-relief
+          ground_branches:
+          - condition: 用户询问除了报警还有哪些求助渠道，或不同求助方式（投诉、求助、报警、起诉）是否需要按固定顺序进行
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 用户询问申请保护令或告诫书是否需要先报警或先提起离婚诉讼
+            node_id: protection-order
+            source_roles:
+            - legal_basis
+          - condition: 用户询问家暴是否构成法定离婚事由，或离婚时能否要求损害赔偿
+            node_id: family-law-relief
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+        n7a:
+          capsule_ref: content/capsule/N7a 创伤修复.md
+          ground_ref: content/capsule/N7a 创伤修复.md#ground
+          answer_section_refs:
+          - content/capsule/N7a 创伤修复.md#applicability
+          - content/capsule/N7a 创伤修复.md#render_policy
+          - content/capsule/N7a 创伤修复.md#recognize
+          - content/capsule/N7a 创伤修复.md#act
+          configured_ground_node_ids: []
+          ground_branches: []
+          ground_policy: conditional_on_demand
+        k4:
+          capsule_ref: content/capsule/K4 习得性无助.md
+          ground_ref: content/capsule/K4 习得性无助.md#ground
+          answer_section_refs:
+          - content/capsule/K4 习得性无助.md#applicability
+          - content/capsule/K4 习得性无助.md#render_policy
+          - content/capsule/K4 习得性无助.md#recognize
+          - content/capsule/K4 习得性无助.md#act
+          configured_ground_node_ids:
+          - domestic-violence-scope
+          ground_branches:
+          - condition: 用户描述长期经济控制，询问这是否构成家暴、如何开始取证
+            node_id: domestic-violence-scope
+            source_roles:
+            - legal_basis
+            - case_application
+          ground_policy: conditional_on_demand
+      ground:
+        activation: optional
+        required_node_ids: []
+        background_node_ids: []
+        background_source_refs: []
+        reason: 本轮无需依赖外部引文才可回应；按需加载或危机优先，不要求公开内部引用。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps: []
+      runtime_ground_gaps: {}
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - n3
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: reviewed
+        reviewer: user
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 迷茫与未明确目标，需要支持及澄清，不是新的即时危险
+        crisis_required: false
+        acceptable_routes: *id002
+        preferred_route: n3
+        allowed_alternatives:
+        - 一个可拒绝的小选择或先倾听也可，不强制立刻行动
+        review_issue: 纯倾诉时 n7a 合理，旧单路由标签过窄
+        response_candidate:
+          required_claims:
+          - 接納迷茫並讓使用者選擇目前最需要的支持
+          - 提出一個小而可行的下一步
+          forbidden_claims:
+          - 因使用者重複說迷茫而責備
+          - 一次要求完成整套離婚搬家程序
+        response_amendments: []
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required: []
+        reviewed_at: '2026-09-24'
+      snapshot_scope: 当前content Markdown完整清单：evaluation_multimodels/oracles/source-snapshot-2026-09-23.json
+      previous_review:
+        status: reviewed
+        reviewed_by: mat
+        reviewed_at: '2026-09-22'
+        snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      revision_note: 当前内容引用合同重建；保留原回答oracle与原审核记录，新引用合同待审核，不自动批准aggregate。
+      review_basis: 用户于2026-09-24对已展示的Minimal33新版逐轮合同明确回复“接受”；接受其已披露的来源缺口与适用状态，不将缺口视为补齐，也不批准aggregate。
+      reviewed_snapshot_id: sha256:38a777c9f50a6a6054a05f5b22f44bc6f498400a825c2b802225f9be13acb4e1
+      technical_rebind:
+        authored_by: codex
+        date: '2026-09-24'
+        scope: 用户接受的路由/安全/必需来源标签不变；仅刷新内容快照及可配置分支清单
+        not_new_human_review: true
+- turn: 3
+  user: 我想离开，但又怕没地方去。
+  expected:
+    capsule_ids: &id003
+    - n3c
+    - n2
+    response_oracle:
+      required_claims:
+      - 無工作且擔心住處時先探索低成本臨時安全住宿
+      - 若寵物影響離開選擇，可詢問是否需一併安排
+      forbidden_claims:
+      - 保證任何庇護所都接受金毛犬
+      - 預設使用者能支付酒店長住
+    route_ids: *id003
+    preferred_route_id: n3c
+    safety_levels:
+    - normal
+    wiki_refs: []
+    source_refs: []
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: reviewed
+      reviewed_by: user
+      reviewed_at: '2026-09-24'
+      authored_by: codex
+      authored_at: '2026-09-23'
+      snapshot_id: sha256:c129f16a496ba07b46ffa27fc59c80ae9cd243a3952c471e294b072a8325e51e
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 明确想离开，首要障碍是无处住宿
+      route_contracts:
+        n3c:
+          capsule_ref: content/capsule/N3c 亲友·社区·机构求助.md
+          ground_ref: content/capsule/N3c 亲友·社区·机构求助.md#ground
+          answer_section_refs:
+          - content/capsule/N3c 亲友·社区·机构求助.md#applicability
+          - content/capsule/N3c 亲友·社区·机构求助.md#render_policy
+          - content/capsule/N3c 亲友·社区·机构求助.md#recognize
+          - content/capsule/N3c 亲友·社区·机构求助.md#act
+          configured_ground_node_ids:
+          - help-and-reporting-paths
+          - local-intake-risk-assessment-and-referral
+          - temporary-shelter-and-placement
+          - legal-aid-and-procedural-support
+          - mandatory-reporting
+          ground_branches:
+          - condition: 用户询问可以向哪些机构求助及其法定职责
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 用户询问妇联、社区等机构如何接案、评估和转介
+            node_id: local-intake-risk-assessment-and-referral
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问临时庇护所或救助站如何申请和入住
+            node_id: temporary-shelter-and-placement
+            source_roles:
+            - legal_basis
+          - condition: 用户询问庇护所的实际操作流程和服务内容
+            node_id: temporary-shelter-and-placement
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问如何申请法律援助或是否需要付费
+            node_id: legal-aid-and-procedural-support
+            source_roles:
+            - legal_basis
+          - condition: 用户询问投诉求助记录能否作为证据使用
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 未成年人询问向老师等人员披露受暴会否保密，或教师等专业人员询问发现、疑似未成年人受侵害的报告义务和报告后保护
+            node_id: mandatory-reporting
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+        n2:
+          capsule_ref: content/capsule/N2 安全准备.md
+          ground_ref: content/capsule/N2 安全准备.md#ground
+          answer_section_refs:
+          - content/capsule/N2 安全准备.md#applicability
+          - content/capsule/N2 安全准备.md#render_policy
+          - content/capsule/N2 安全准备.md#recognize
+          - content/capsule/N2 安全准备.md#act
+          configured_ground_node_ids:
+          - temporary-shelter-and-placement
+          - protection-order-real-danger-element
+          - protection-order
+          - liability-for-domestic-violence
+          - child-safety-and-guardianship
+          ground_branches:
+          - condition: 用户没有安全落脚点，询问是否有临时庇护场所，或询问入住条件
+            node_id: temporary-shelter-and-placement
+            source_roles:
+            - legal_basis
+          - condition: 用户有同住的未成年子女，询问孩子在紧急情况下能否被临时安置或托管
+            node_id: temporary-shelter-and-placement
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户尚未遭受身体暴力但因威胁、暴力升级信号感到恐惧，询问能否提前申请人身安全保护令
+            node_id: protection-order-real-danger-element
+            source_roles:
+            - legal_basis
+          - condition: 用户离开后担心对方跟踪、骚扰，询问能否申请保护令加以限制
+            node_id: protection-order
+            source_roles:
+            - legal_basis
+          - condition: 用户担心自己动手反抗会不会犯法，询问正当防卫在什么情况下适用
+            node_id: liability-for-domestic-violence
+            source_roles:
+            - legal_basis
+            - case_application
+          - condition: 用户有同住的未成年子女，询问对方施暴是否会影响法院判定抚养权归属，或能否申请变更现有抚养关系
+            node_id: child-safety-and-guardianship
+            source_roles:
+            - legal_basis
+            - case_application
+          ground_policy: conditional_on_demand
+      ground:
+        activation: optional
+        required_node_ids: []
+        background_node_ids:
+        - temporary-shelter-and-placement
+        background_source_refs:
+        - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第三章 家庭暴力的处置/第十八条
+        - content/knowledge/source/049-关于做好家庭暴力受害人庇护救助工作的指导意见.md#民政部 全国妇联关于做好家庭暴力受害人庇护救助工作的指导意见/一、工作对象
+        reason: 本轮可先支持、澄清或安全规划，不强制讲法律结论；若回答主动加入具体法律主张，仍需独立依据审查。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps: []
+      runtime_ground_gaps: {}
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - n2
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: reviewed
+        reviewer: user
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 明确想离开，首要障碍是无处住宿
+        crisis_required: false
+        acceptable_routes: *id003
+        preferred_route: n3c
+        allowed_alternatives:
+        - 先核实免费临时安置或安全计划，宠物安排可随后确认
+        review_issue: 机构有空位及接收宠物不能从号码推定
+        response_candidate:
+          required_claims:
+          - 無工作且擔心住處時先探索低成本臨時安全住宿
+          - 若寵物影響離開選擇，可詢問是否需一併安排
+          forbidden_claims:
+          - 保證任何庇護所都接受金毛犬
+          - 預設使用者能支付酒店長住
+        response_amendments: []
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required: []
+        reviewed_at: '2026-09-24'
+      snapshot_scope: 当前content Markdown完整清单：evaluation_multimodels/oracles/source-snapshot-2026-09-23.json
+      previous_review:
+        status: reviewed
+        reviewed_by: mat
+        reviewed_at: '2026-09-22'
+        snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      revision_note: 当前内容引用合同重建；保留原回答oracle与原审核记录，新引用合同待审核，不自动批准aggregate。
+      review_basis: 用户于2026-09-24对已展示的Minimal33新版逐轮合同明确回复“接受”；接受其已披露的来源缺口与适用状态，不将缺口视为补齐，也不批准aggregate。
+      reviewed_snapshot_id: sha256:38a777c9f50a6a6054a05f5b22f44bc6f498400a825c2b802225f9be13acb4e1
+      technical_rebind:
+        authored_by: codex
+        date: '2026-09-24'
+        scope: 用户接受的路由/安全/必需来源标签不变；仅刷新内容快照及可配置分支清单
+        not_new_human_review: true
+- turn: 4
+  user: 我爸妈不支持我。
+  expected:
+    capsule_ids: &id004
+    - n3c
+    - n7a
+    response_oracle:
+      required_claims:
+      - 接納父母不支持造成的失落
+      - 探索父母以外的可信支持或社工資源
+      forbidden_claims:
+      - 要求必須先說服父母
+      - 把家人反對當成必須回家的理由
+    route_ids: *id004
+    preferred_route_id: n3c
+    safety_levels:
+    - normal
+    wiki_refs: []
+    source_refs: []
+    reference_oracle:
+      version: case-reference-oracle/v1
+      status: reviewed
+      reviewed_by: user
+      reviewed_at: '2026-09-24'
+      authored_by: codex
+      authored_at: '2026-09-23'
+      snapshot_id: sha256:c129f16a496ba07b46ffa27fc59c80ae9cd243a3952c471e294b072a8325e51e
+      scope:
+      - route_ids
+      - preferred_route_id
+      - safety_levels
+      - capsule_ids
+      - wiki_refs
+      - source_refs
+      rationale: 父母支持失败，需接纳并探索其他可用支援
+      route_contracts:
+        n3c:
+          capsule_ref: content/capsule/N3c 亲友·社区·机构求助.md
+          ground_ref: content/capsule/N3c 亲友·社区·机构求助.md#ground
+          answer_section_refs:
+          - content/capsule/N3c 亲友·社区·机构求助.md#applicability
+          - content/capsule/N3c 亲友·社区·机构求助.md#render_policy
+          - content/capsule/N3c 亲友·社区·机构求助.md#recognize
+          - content/capsule/N3c 亲友·社区·机构求助.md#act
+          configured_ground_node_ids:
+          - help-and-reporting-paths
+          - local-intake-risk-assessment-and-referral
+          - temporary-shelter-and-placement
+          - legal-aid-and-procedural-support
+          - mandatory-reporting
+          ground_branches:
+          - condition: 用户询问可以向哪些机构求助及其法定职责
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 用户询问妇联、社区等机构如何接案、评估和转介
+            node_id: local-intake-risk-assessment-and-referral
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问临时庇护所或救助站如何申请和入住
+            node_id: temporary-shelter-and-placement
+            source_roles:
+            - legal_basis
+          - condition: 用户询问庇护所的实际操作流程和服务内容
+            node_id: temporary-shelter-and-placement
+            source_roles:
+            - legal_basis
+            - institutional_implementation
+          - condition: 用户询问如何申请法律援助或是否需要付费
+            node_id: legal-aid-and-procedural-support
+            source_roles:
+            - legal_basis
+          - condition: 用户询问投诉求助记录能否作为证据使用
+            node_id: help-and-reporting-paths
+            source_roles:
+            - legal_basis
+          - condition: 未成年人询问向老师等人员披露受暴会否保密，或教师等专业人员询问发现、疑似未成年人受侵害的报告义务和报告后保护
+            node_id: mandatory-reporting
+            source_roles:
+            - legal_basis
+          ground_policy: conditional_on_demand
+        n7a:
+          capsule_ref: content/capsule/N7a 创伤修复.md
+          ground_ref: content/capsule/N7a 创伤修复.md#ground
+          answer_section_refs:
+          - content/capsule/N7a 创伤修复.md#applicability
+          - content/capsule/N7a 创伤修复.md#render_policy
+          - content/capsule/N7a 创伤修复.md#recognize
+          - content/capsule/N7a 创伤修复.md#act
+          configured_ground_node_ids: []
+          ground_branches: []
+          ground_policy: conditional_on_demand
+      ground:
+        activation: optional
+        required_node_ids: []
+        background_node_ids:
+        - help-and-reporting-paths
+        background_source_refs:
+        - content/knowledge/source/002-中华人民共和国反家庭暴力法.md#第三章 家庭暴力的处置/第十九条
+        - content/knowledge/source/011-法律援助法.md#第三十二条
+        reason: 本轮可先支持、澄清或安全规划，不强制讲法律结论；若回答主动加入具体法律主张，仍需独立依据审查。
+      semantic_alignment:
+        mode: applicable_sections_only
+        requirement: 回答中的建议须受所选 capsule/SOP 的适用条件、禁用条件及相关段落支持；不要求复述全部段落。
+        evidence_required:
+        - 原回答精确引文
+        - 实际注入内容精确引文
+        - 同一轮 context snapshot
+        missing_evidence_status: UNAVAILABLE
+        causal_claim: 不能凭路由正确、注入或引用命中声称因果依赖。
+      source_gaps: []
+      runtime_ground_gaps: {}
+      metric_applicability:
+        response_claims: applicable
+        answer_must_cite: 'not_applicable: 不要求用户可见回答公开内部引用；required_claims仍约束实质内容。'
+        ranked_retrieval: 'not_applicable: 当前 chatflow 使用非排名 ground resolver，没有完整 qrels。'
+        tool_execution: 'not_applicable: 当前 chatflow 不执行外部工具。'
+        real_world_goal: 'not_applicable: 对话不能证明报警/安置/司法等现实结果。'
+        reference_answer: 'not_applicable: 使用逐项语义断言，避免唯一措辞标准。'
+        max_chars: 按实际捕获的prompt核对普通回复300字/明确展开500字硬上限；危机约束另查，不统一套用。
+        memory: 'not_applicable: 本案无独立记忆检查点。'
+      prior_labels:
+        capsule_ids:
+        - n3c
+      semantic_review:
+        version: minimal32-independent-review/v1
+        status: reviewed
+        reviewer: user
+        authored_at: '2026-09-14'
+        basis: 依据逐轮用户原话及此前用户上下文，不复制扫描器或subject路由为gold；复审并非盲审，仍需人审校准。
+        risk_basis: 父母支持失败，需接纳并探索其他可用支援
+        crisis_required: false
+        acceptable_routes: *id004
+        preferred_route: n3c
+        allowed_alternatives:
+        - 可先回应失落，再询问正式机构或其他可信联系
+        review_issue: 不能默认换一个亲友就一定可行
+        response_candidate:
+          required_claims:
+          - 接納父母不支持造成的失落
+          - 探索父母以外的可信支持或社工資源
+          forbidden_claims:
+          - 要求必須先說服父母
+          - 把家人反對當成必須回家的理由
+        response_amendments: []
+        interpretation: required描述回应内容；可选建议不要求用户执行。允许等义、条件式说明及相关前文承接；不能用背诵capsule代替用户需求。
+        human_review_required: []
+        reviewed_at: '2026-09-24'
+      snapshot_scope: 当前content Markdown完整清单：evaluation_multimodels/oracles/source-snapshot-2026-09-23.json
+      previous_review:
+        status: reviewed
+        reviewed_by: mat
+        reviewed_at: '2026-09-22'
+        snapshot_id: sha256:4f35e4600c0b4de836bae206e9ca7ff8866d1691e8cfc5dad6df8033d601748c
+      revision_note: 当前内容引用合同重建；保留原回答oracle与原审核记录，新引用合同待审核，不自动批准aggregate。
+      review_basis: 用户于2026-09-24对已展示的Minimal33新版逐轮合同明确回复“接受”；接受其已披露的来源缺口与适用状态，不将缺口视为补齐，也不批准aggregate。
+      reviewed_snapshot_id: sha256:38a777c9f50a6a6054a05f5b22f44bc6f498400a825c2b802225f9be13acb4e1
+      technical_rebind:
+        authored_by: codex
+        date: '2026-09-24'
+        scope: 用户接受的路由/安全/必需来源标签不变；仅刷新内容快照及可配置分支清单
+        not_new_human_review: true
+memory_checkpoints: []
+oracle_provenance:
+  source: legacy_v1_migration_2026-08-23; response_oracle_review_2026-09-13
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: null
+maturity: REVIEWED

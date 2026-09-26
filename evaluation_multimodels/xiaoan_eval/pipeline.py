@@ -384,6 +384,7 @@ class EvaluationPipeline:
                 "red_lines": list(case_score.triggered_red_lines),
             },
             "pipeline": {
+                "planned_turns": [{"turn": t.turn, "user_input": t.user} for t in case.turns],
                 "execution_status": execution_status,
                 "coverage": case_coverage(case),
                 "turns": [
@@ -683,7 +684,7 @@ def _performance(run: CaseRunResult) -> dict[str, Any]:
 
 
 def _cohorts(case: TestCase) -> dict[str, tuple[str, ...]]:
-    result: dict[str, tuple[str, ...]] = {}
+    result: dict[str, tuple[str, ...]] = {"quality_focus": tuple(case.quality_focus)}
     for key, value in case.tags.items():
         values = value if isinstance(value, list) else [value]
         result[str(key)] = tuple(str(item) for item in values)

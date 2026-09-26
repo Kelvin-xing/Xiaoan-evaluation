@@ -1,5 +1,7 @@
 > 2026-09-13 更新：本文件保留既有操作／方法背景；目前狀態、分母、聚合及能力邊界以 [project README](README.md) 和 [v2 契約](measurement-contract-v2.zh-HK.md) 為準。特別是 UNAVAILABLE 不計品質0、自評預設隔離、Kendall不插補、schema2.1與有限oracle覆蓋。
 
+> **2026-09-22 新增：** `measure unified` 共用一次抽取的 claim 清單，分開支持／正確性／安全任務 gate；`measure capsule-ablation` 提供固定 Composer context 對照。新版本不改寫舊分數。完整合約、命令、人工校準與 live 驗證邊界見 [evaluation-unified-v1](../../docs/implementation/evaluation-unified-v1.md)。
+
 # `evaluation_multimodels/` 方法論與實作狀態
 
 更新：2026-09-08

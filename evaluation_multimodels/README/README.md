@@ -1,4 +1,14 @@
-# evaluation_multimodels｜Subject × Judge 交叉評估
+# 新版入口（2026-09-24）
+
+本目錄共用 `evaluation/` 的 Frozen Answer Evaluation 引擎。請依 [新版操作指南](../../evaluation/README/frozen-answer-evaluation.zh-HK.md) 執行 `matrix`；舊 `unified`／`staged` 和 workbook 報告入口已移除。以下早期操作說明保留作背景，不作新流程執行依據。
+
+# XiaoAn Matrix Evaluation
+
+本目錄只保留 subject × Judge 的 matrix 生成、案例、oracles、runs、專用測試及診斷。共用 evaluator、完整 JSON、八表 Excel、Report Agent、Human Review、校準與成本模組以 `evaluation/` canonical package 為準。
+
+請依 [Frozen Answer Evaluation 操作指南](../../evaluation/README/frozen-answer-evaluation.zh-HK.md) 執行。歷史 matrix 說明與批准產物仍保留在本目錄；新的正式入口不使用 `unified`／`staged`。
+
+> **2026-09-22 新增：** `measure unified` 共用一次抽取的 claim 清單，分開支持／正確性／安全任務 gate；`measure capsule-ablation` 提供固定 Composer context 對照。新版本不改寫舊分數。完整合約、命令、人工校準與 live 驗證邊界見 [evaluation-unified-v1](../../docs/implementation/evaluation-unified-v1.md)。
 
 **2026-09-13 · scoring `response-effectiveness/v2` · 專用 matrix workbook**
 
@@ -37,7 +47,26 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. python -m pytest -q
 
 ## 3. Registry與case選擇
 
-預設10subjects（五provider×latest/second）及5Judges。這是程式registry，不保證model仍為市場最新或provider可用；使用 `--subjects`、`--judges` 固定本次真正model IDs、tier與reasoning_effort，可跑5×5。
+### 模型與 API key
+
+預設只使用 Claude、OpenAI（內部 provider ID 為 `gpt`）、Gemini：
+每家兩個 answer 型號，latest 型號兼任 judge，共 6 個 answer × 3 個 judge。
+保留現有具體型號，不自動升級。
+
+四家（Claude、GPT、Gemini、DeepSeek）共用 `各厂商使用独立官方端点与 API key`，只需在
+[`.env`](../.env) 填寫三個 key（範本：[`.env.example`](../.env.example)）：
+
+| 系列 | API key 欄位 |
+| --- | --- |
+| Claude | `XIAOAN_CLAUDE_API_KEY` |
+| OpenAI | `XIAOAN_OPENAI_API_KEY` |
+| Gemini | `XIAOAN_GEMINI_API_KEY` |
+
+同一家所有型號、answer 和 judge 共用該系列 key。Direct answer、Matrix Judge、
+普通 Judge、建議生成，以及 `tech_multimodels` 的 Safety／Router／Ground／Composer
+均按實際模型所屬系列選取 key；更換同系列型號不需要修改 key 欄位名稱。
+系列 key 必须在共享文件中填写，缺少或留空会报错。填好后重启 evaluator 及多模型 chatflow。
+Safety 預設為 `gpt-5.6-luna`。Qwen／Kimi 已退出預設矩陣與本機選單，历史資料保留。
 
 JSON檔是ModelSpec object array；以下是**格式示例**，`YOUR_AVAILABLE_MODEL_ID`須替換：
 
@@ -142,3 +171,50 @@ v2本機完整測試292 passed；發布前亦在standalone clone驗證。測試�
 ## 評估方法 v3
 
 [完整操作與資料契約](measurement-methods-v3.zh-HK.md)：新增`measure`的answer/retrieval/oracle/pairwise/cluster/outcome/perturbation/calibration/online入口。主Judge已接semantic oracle，排序報告可讀已reviewed retrieval oracle及匹配trace版本。真實gold、harness與線上資料仍由團隊提供，不把合成範例當產品能力驗證。
+
+
+### Test case 引用 oracle（2026-09-13）
+
+正式 74 案 217 轮已增加按当前 content 快照绑定的分流、安全与引用标签。新增标签单独待审核，原回答 oracle 审核不被撤销，也不会被继承到新标签。详情与 217 轮审核表见 [引用更新说明](../oracles/README.zh-CN.md)。仍需区分来源缺口、运行证据缺失与不适用指标。
+
+## 輸出盤點
+
+完整的交付文件、工作表、指標及可用條件見 [Evaluation 輸出盤點](output-inventory.zh-HK.md)。
+
+
+## LLM Report Agent
+
+正式 CLI 的最終 `report.md` 已改由 LLM Report Agent 讀取 `results.xlsx` 後生成，舊 Markdown 模板不再作預設或失敗備援。設定、定義表載入、離線報告重試與失敗恢復見 [Report Agent 使用說明](report-agent.zh-HK.md)。
+
+## 共享模型配置（2026-09-23）
+
+`evaluation`、`evaluation_multimodels`、`evaluation_report_agent` 的内置 live 调用
+统一读取仓库的 `evaluation_multimodels/.env`。模型字段以文件为准，进程环境变量、
+旧项目 `.env` 和写死默认值不再决定模型；必需字段缺失时在调用前报错。
+
+- 矩阵 answer：`XIAOAN_{CLAUDE,GPT,GEMINI}_{LATEST,SECOND}_MODEL`。
+- 矩阵 judge：`XIAOAN_{CLAUDE,GPT,GEMINI}_JUDGE_MODEL`。
+- 普通评估：`XIAOAN_JUDGE_MODEL`、`XIAOAN_SECONDARY_JUDGE_MODEL`。
+- 建议与报告：`XIAOAN_RECOMMENDATION_MODEL`、`XIAOAN_REPORT_MODEL`。
+- Unified：`XIAOAN_CLAIM_EXTRACTOR_MODEL`、`XIAOAN_CLAIM_ASSESSOR_MODEL`。
+- 被测服务：`XIAOAN_SAFETY_MODEL`、`XIAOAN_ROUTER_MODEL`、`XIAOAN_RESPONSE_MODEL`；
+  多模型服务可选列表为 `XIAOAN_ROUTER_MODELS`、`XIAOAN_RESPONSE_MODELS`。
+
+API key 分别为 `XIAOAN_CLAUDE_API_KEY`、`XIAOAN_OPENAI_API_KEY`、
+`XIAOAN_GEMINI_API_KEY`，统一使用 `各厂商独立端点`。
+矩阵自定义清单只能选文件中配置的相应模型；Report Agent 的 `--model` 若与文件冲突会报错。
+Unified 输入中的模型身份必须与对应字段相同，避免篡改冻结证据和检查点身份。
+
+新运行 manifest 的模型字段从共享配置生成，旧 manifest／结果／检查点不重写。
+普通评估会显式传入 Router／回答模型，并核对服务的 Safety 配置及返回 trace；
+服务不匹配时需先配置并重启。远端服务仍须由部署者加载对应配置；评估器不会修改远端部署。
+自定义第三方插件应自行遵守同一契约，其内部请求不受内置配置模块控制。
+修改配置后重启服务与评估进程。配置与离线测试通过不等于供应商已确认模型可用。
+
+反向问题生成示例使用 `XIAOAN_RELEVANCY_MODEL`；旧 Google embedding 示例的型号使用
+`GOOGLE_EMBEDDING_MODEL`。旧实验的固定端点和证据授权检查仍保留，不会自动扩大历史数据发送范围。
+
+Embedding 配置同样位于 `evaluation_multimodels/.env`：`GOOGLE_EMBEDDING_MODEL`、
+`GOOGLE_EMBEDDING_BASE_URL`、`GOOGLE_EMBEDDING_API_KEY`、`GOOGLE_EMBEDDING_TASK_TYPE`、
+`GOOGLE_EMBEDDING_DIMENSIONS`。继续使用 `gemini-embedding-001`、Google 官方 `v1beta` 地址、
+原有专用 key、`SEMANTIC_SIMILARITY` 和 3072 维；缓存／输入／输出路径保持不变。

@@ -15,13 +15,16 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from .report_model import ReportModel, SCHEMA_VERSION, canonical_digest
+from . import detail_tables as details
 
 
-SHEETS = (
+LEGACY_SHEETS = (
     "00_Overview", "01_Cases", "02_Turns", "03_Metrics", "04_Baseline",
     "05_Experiments", "06_Human_Review", "07_Stability", "08_Metadata",
     "09_Data_Dictionary",
 )
+
+SHEETS = LEGACY_SHEETS + details.NAMES
 
 HEADERS: Mapping[str, tuple[str, ...]] = {
     "00_Overview": ("section", "metric", "value", "status", "interpretation"),
@@ -164,9 +167,15 @@ def write_workbook(model: ReportModel, path: Path) -> None:
         "08_Metadata": _metadata_rows(model),
         "09_Data_Dictionary": _dictionary_rows(),
     }
-    for index, name in enumerate(SHEETS):
+    analysis = details.analysis_from_metrics(model.metrics)
+    _, tables = details.project(analysis)
+    rows_by_sheet['02_Turns'] = details.turn_projection(rows_by_sheet['02_Turns'], analysis)
+    for index, name in enumerate(LEGACY_SHEETS):
         sheet = workbook.create_sheet(name)
-        _write_sheet(sheet, HEADERS[name], rows_by_sheet[name], index)
+        headers = HEADERS[name] + details.TURN_COLUMNS if name == '02_Turns' else HEADERS[name]
+        _write_sheet(sheet, headers, rows_by_sheet[name], index)
+    for name, rows in tables.items():
+        details.write_table(workbook, name, details.HEADERS[name], rows)
     workbook.calculation.fullCalcOnLoad = False
     workbook.calculation.forceFullCalc = False
     workbook.properties.title = "小安評估結果"
@@ -178,7 +187,7 @@ def write_workbook(model: ReportModel, path: Path) -> None:
 def read_workbook(path: Path) -> WorkbookFacts:
     preflight_ooxml(path)
     workbook = load_workbook(path, read_only=False, data_only=False, keep_links=False)
-    if tuple(workbook.sheetnames) != SHEETS:
+    if tuple(workbook.sheetnames) not in (LEGACY_SHEETS, SHEETS):
         raise ValueError("workbook sheet contract does not match the supported schema")
     for sheet in workbook.worksheets:
         if sheet.sheet_state != "visible":
@@ -187,13 +196,16 @@ def read_workbook(path: Path) -> WorkbookFacts:
             if any(cell.data_type == "f" for cell in row):
                 raise ValueError(f"formulas are not allowed in imported workbooks: {sheet.title}")
     metadata_rows = _read_rows(workbook["08_Metadata"], HEADERS["08_Metadata"])
-    metadata = {str(row["key"]): _decode_metadata(row) for row in metadata_rows}
+    metadata = _read_metadata(metadata_rows)
     if metadata.get("schema_version") not in {"2.0", SCHEMA_VERSION}:
         raise ValueError(f"unsupported workbook schema: {metadata.get('schema_version')!r}")
     manifest = metadata.get("manifest", {})
     if not isinstance(manifest, Mapping):
         raise ValueError("workbook manifest metadata must be an object")
-    turns, text_content = _read_turn_sheet(workbook["02_Turns"])
+    modern = tuple(workbook.sheetnames) == SHEETS
+    if modern and metadata.get("detail_layout_version") != "readable-details/v1":
+        raise ValueError("missing readable detail layout version")
+    turns, text_content = _read_turn_sheet(workbook["02_Turns"], modern=modern)
     facts = WorkbookFacts(
         schema_version=str(metadata["schema_version"]),
         generation_id=str(metadata["generation_id"]),
@@ -222,6 +234,18 @@ def read_workbook(path: Path) -> WorkbookFacts:
     })
     if facts.core_digest != expected_core or facts.lifecycle_digest != expected_lifecycle:
         raise ValueError("workbook logical digest validation failed")
+    if modern:
+        analysis = details.analysis_from_metrics(facts.metrics)
+        _, tables = details.project(analysis)
+        def expected_rows(headers, rows):
+            return [{h: _excel_value(r.get(h)) for h in headers} for r in rows]
+        for name, rows in tables.items():
+            if canonical_digest(_read_rows(workbook[name], details.HEADERS[name])) != canonical_digest(expected_rows(details.HEADERS[name], rows)):
+                raise ValueError(f"readable detail validation failed: {name}")
+        headers = HEADERS['02_Turns'] + details.TURN_COLUMNS
+        expected = details.turn_projection(_turn_sheet_rows(facts.turns, facts.text_content), analysis)
+        if canonical_digest(_read_rows(workbook['02_Turns'], headers)) != canonical_digest(expected_rows(headers, expected)):
+            raise ValueError("readable turn validation failed")
     return facts
 
 
@@ -280,7 +304,7 @@ def _write_sheet(sheet, headers: Sequence[str], rows: Sequence[Mapping[str, Any]
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F4E78")
         cell.alignment = Alignment(vertical="center")
-        label = HEADER_LABELS.get(str(cell.value), str(cell.value))
+        label = HEADER_LABELS.get(str(cell.value), "診斷欄位：" + str(cell.value))
         cell.comment = Comment(f"{label}（{cell.value}）", "XiaoAn Evaluation")
     for column_index, header in enumerate(headers, 1):
         width = 14
@@ -343,12 +367,14 @@ def _turn_sheet_rows(turns: Sequence[Mapping[str, Any]], text_content: Sequence[
     return tuple(rows)
 
 
-def _read_turn_sheet(sheet):
-    rows = _read_rows(sheet, HEADERS["02_Turns"])
+def _read_turn_sheet(sheet, modern=False):
+    rows = _read_rows(sheet, HEADERS["02_Turns"] + details.TURN_COLUMNS if modern else HEADERS["02_Turns"])
     turns = []
     text_content = []
     for row in rows:
         kind = str(row.get("row_kind") or "turn").lower()
+        if kind == "diagnostic":
+            continue
         if kind == "text":
             text_content.append({key: row.get(key) for key in (
                 "text_id", "case_id", "turn", "role", "chunk_index", "chunk_count", "text_sha256", "content"
@@ -363,13 +389,53 @@ def _read_turn_sheet(sheet):
 def _metadata_rows(model: ReportModel):
     values = {
         "schema_version": model.schema_version,
+        "detail_layout_version": "readable-details/v1",
         "generation_id": model.generation_id,
         "artifact_state": model.artifact_state,
         "core_digest": model.core_digest,
         "lifecycle_digest": model.lifecycle_digest,
         "manifest": dict(model.manifest),
     }
-    return tuple({"key": key, "value": _excel_value(value), "value_type": "json" if isinstance(value, Mapping) else "text"} for key, value in values.items())
+    rows = []
+    for key, value in values.items():
+        encoded = _excel_value(value)
+        kind = "json" if isinstance(value, Mapping) else "text"
+        if isinstance(encoded, str) and len(encoded) > 16000:
+            chunks = [encoded[i:i + 16000] for i in range(0, len(encoded), 16000)]
+            rows.extend({"key": key, "value": chunk,
+                         "value_type": f"{kind}_chunk:{i}:{len(chunks)}"}
+                        for i, chunk in enumerate(chunks))
+        else:
+            rows.append({"key": key, "value": encoded, "value_type": kind})
+    return tuple(rows)
+
+
+def _read_metadata(rows):
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(str(row["key"]), []).append(row)
+    result = {}
+    for key, group in grouped.items():
+        kind = str(group[0].get("value_type", ""))
+        if "_chunk:" not in kind:
+            if len(group) != 1:
+                raise ValueError(f"duplicate metadata key: {key}")
+            result[key] = _decode_metadata(group[0])
+            continue
+        base, _, count = kind.split(":")
+        count = int(count)
+        if count != len(group) or count < 2:
+            raise ValueError(f"incomplete metadata chunks: {key}")
+        parts = {}
+        for row in group:
+            part_kind, index, total = str(row.get("value_type", "")).split(":")
+            index = int(index)
+            if part_kind != base or int(total) != count or index in parts or not 0 <= index < count:
+                raise ValueError(f"invalid metadata chunks: {key}")
+            parts[index] = str(row.get("value") or "")
+        result[key] = _decode_metadata({"value": "".join(parts[i] for i in range(count)),
+                                        "value_type": base.removesuffix("_chunk")})
+    return result
 
 
 def _decode_metadata(row: Mapping[str, Any]) -> Any:
@@ -389,12 +455,12 @@ def _dictionary_rows():
     }
     return tuple(
         {
-            "sheet": f"{SHEET_LABELS[sheet]}（{sheet}）",
+            "sheet": f"{SHEET_LABELS.get(sheet, sheet)}（{sheet}）",
             "column": f"{HEADER_LABELS.get(column, column)}（{column}）",
             "type": "具型別欄位",
-            "description": descriptions.get(column, f"{SHEET_LABELS[sheet]}工作表的「{HEADER_LABELS.get(column, column)}」欄位。"),
+            "description": descriptions.get(column, f"{SHEET_LABELS.get(sheet, sheet)}工作表的「{HEADER_LABELS.get(column, column)}」欄位。"),
         }
-        for sheet, headers in HEADERS.items() for column in headers
+        for sheet, headers in {**HEADERS, "02_Turns": HEADERS["02_Turns"] + details.TURN_COLUMNS, **details.HEADERS}.items() for column in headers
     )
 
 

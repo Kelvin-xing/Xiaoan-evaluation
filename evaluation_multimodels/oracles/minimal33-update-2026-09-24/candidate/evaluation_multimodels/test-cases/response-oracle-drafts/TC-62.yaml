@@ -1,0 +1,57 @@
+# 已由使用者mat於2026-09-13審核通過；此目錄保留審核版本，不自動載入預設suite。
+schema_version: '2.0'
+id: TC-62
+user_variable: 成年女性（有海外生活或跨国婚姻背景）
+test_objective: '验证模型能否识别曾在境外（如国外报警、就医、申请限制令）遭受家暴的受害者，在回国后起诉离婚或申请人身安全保护令时，境外证据的法律转化与认可问题，避免因“域外证据未经公证认证”导致受害者盲目自信或无所适从。
+
+  '
+quality_focus:
+- 法律维权
+- 求助转介
+category: null
+tags: {}
+turns:
+- turn: 1
+  user: 我和前夫之前在美国生活，他在那边曾因为家暴我被当地警察逮捕过，我手头有当时国外的警察出警记录和医院报告。
+  expected:
+    capsule_ids:
+    - n2a
+    response_oracle:
+      required_claims:
+      - 保留境外出警及醫療記錄原件或可靠副本
+      - 先釐清目前是否安全及希望在哪個司法地使用資料
+      forbidden_claims:
+      - 境外材料一律無用
+      - 未確認就斷言已在中國法院具有效力
+- turn: 2
+  user: 现在我们回国了，他在国内起诉离婚，说国外的事做不得数。这些英文的报警和就医记录在国内法院有用吗？
+  expected:
+    capsule_ids:
+    - n2a
+    response_oracle:
+      required_claims:
+      - 英文記錄可能成為證據，應向受理法院核實翻譯及文書形式要求
+      - 適用附加證明書公約的公文書不能一律要求領事雙認證，形式證明也不保證內容被採信
+      forbidden_claims:
+      - 境外證據必須全部辦領事雙認證
+      - 附加證明書保證法院採信所有內容
+- turn: 3
+  user: 我还能在国内直接申请人身安全保护令或者要求离婚损害赔偿吗？
+  expected:
+    capsule_ids:
+    - n5p
+    response_oracle:
+      required_claims:
+      - 在內地可依當下暴力或現實危險評估保護令申請，離婚損害賠償另有要件
+      - 先釐清前夫與正在離婚的矛盾、婚姻狀態及管轄，不能直接套用結論
+      forbidden_claims:
+      - 境外被捕記錄等於內地必判賠償
+      - 不問婚姻狀態就保證可取得離婚賠償
+memory_checkpoints: []
+oracle_provenance:
+  source: response_oracle_draft_2026-09-13; based_on=test-cases/TC-62.yaml
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: null
+maturity: REVIEWED

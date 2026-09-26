@@ -63,6 +63,10 @@ def _joined(value: Any) -> str:
 
 def _reason_zh(value: Any) -> str:
     """Render evaluator reasons in Traditional Chinese without losing meaning."""
+    if isinstance(value, Mapping):
+        value = _joined(value)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        value = "；".join(str(item) for item in value)
     if value is None or not str(value).strip():
         return ""
     text = str(value).strip()
@@ -388,7 +392,15 @@ def _turn_metrics(case_id: str, turn: int, turn_key: str, pipeline_metrics: Mapp
         if not isinstance(item, Mapping):
             continue
         module = str(item.get("module", "unknown"))
-        rows.append(_metric_row(case_id, turn, turn_key, f"judge:{module}", module, _number(item.get("score")), "AVAILABLE", item.get("deduction_reason"), item.get("supporting_evidence"), "automatic"))
+        deduction_evidence = item.get("deduction_evidence")
+        supporting_evidence = item.get("supporting_evidence")
+        rows.append(_metric_row(
+            case_id, turn, turn_key, f"judge:{module}", module,
+            _number(item.get("score")), "AVAILABLE",
+            deduction_evidence,
+            {"supporting": supporting_evidence, "deduction": deduction_evidence},
+            "automatic",
+        ))
     for item in _sequence(primary.get("red_lines")):
         if not isinstance(item, Mapping):
             continue

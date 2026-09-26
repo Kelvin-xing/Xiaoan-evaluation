@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .reference_oracle import field_is_reviewed
+
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -158,6 +160,9 @@ def evaluate_turn_metrics(
     results["route_preference"] = _preferred_route(
         expected.preferred_route_id, trace
     )
+    for name, field in (("safety", "safety_levels"), ("route", "route_ids"), ("route_preference", "preferred_route_id")):
+        if not field_is_reviewed(expected, field):
+            results[name] = _skip("reference oracle label is provisional; original response approval does not apply")
     # Ground citation oracles are retained only for legacy case-file parsing.
     # Citation quality is not judged from required/relevant ref lists.
     results["ground_recall"] = _skip("ground citation oracle is not evaluated")

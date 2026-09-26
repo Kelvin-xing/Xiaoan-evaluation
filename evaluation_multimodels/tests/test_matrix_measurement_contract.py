@@ -25,6 +25,12 @@ def test_matrix_renderers_share_weighted_total_and_dimension_summary(tmp_path):
     path = tmp_path / "matrix.xlsx"
     write_matrix_workbook(data, path)
     wb = load_workbook(path, data_only=True)
+    assert wb.sheetnames[:5] == ["Overview", "Score Summary", "Routing Summary", "Coverage & Usage", "Matrix"]
+    assert [cell.value for cell in wb["Overview"][1]] == ["metric", "value", "status", "note"]
+    assert [cell.value for cell in wb["Score Summary"][1]][:4] == ["subject_id", "judge_id", "rubric_average", "faithfulness_average"]
+    assert [cell.value for cell in wb["Coverage & Usage"][1]] == ["section", "metric", "value", "status", "note"]
+    assert [cell.value for cell in wb["Measurement_Contract"][1]] == ["section", "field", "value"]
+    assert "raw_scores_json" not in [cell.value for cell in wb["Dimension_Statistics"][1]]
     assert wb["Matrix"]["B2"].value == 1
     assert "| s | 1.0000 |" in report
     assert wb["Dimension_By_Judge"]["C2"].value == 0

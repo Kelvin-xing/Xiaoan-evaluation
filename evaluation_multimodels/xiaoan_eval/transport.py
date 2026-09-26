@@ -52,6 +52,7 @@ class FastAPITransport:
         timeout: float = 600.0,
         retry_policy: RetryPolicy | None = None,
         *,
+        models: Mapping[str, str] | None = None,
         retries: int | None = None,
         backoff_seconds: float | None = None,
         opener: _Opener | None = None,
@@ -70,6 +71,7 @@ class FastAPITransport:
                 ),
             )
 
+        self._models = dict(models or {})
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._retries = policy.retries
@@ -78,6 +80,10 @@ class FastAPITransport:
         self._sleep = sleep
 
     def create_conversation(self) -> str:
+        if self._models:
+            configured = self._request_json("GET", "/v1/config/models")
+            if configured.get("safety", {}).get("default") != self._models.get("safety"):
+                raise TransportError("chatflow safety model does not match shared evaluation .env; restart/configure the service")
         payload = self._request_json("POST", "/v1/conversations")
         conversation_id = payload.get("conversation_id")
         if not isinstance(conversation_id, str) or not conversation_id:
@@ -88,8 +94,14 @@ class FastAPITransport:
         encoded_id = quote(conversation_id, safe="")
         answer, debug = self._request_stream(
             f"/v1/conversations/{encoded_id}/responses/stream",
-            {"message": user, "debug": True},
+            {"message": user, "debug": True,
+             **{f"{role}_model": self._models[role] for role in ("router", "response") if role in self._models}},
         )
+        if self._models:
+            actual = debug.get("models", {})
+            for role in ("safety", "router", "response"):
+                if role in self._models and actual.get(role) != self._models[role]:
+                    raise TransportError(f"chatflow {role} model does not match shared evaluation .env")
         trace = self._normalize_debug(debug)
         return {"response": answer, "trace": trace}
 

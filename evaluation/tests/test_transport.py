@@ -86,6 +86,16 @@ def debug_payload() -> dict:
     }
 
 
+def test_http_stream_preserves_effective_context_snapshot() -> None:
+    debug = debug_payload()
+    snapshot = {"schema_version": "effective-context-snapshot/v1", "snapshot_id": "s1",
+                "invocations": {"composer": {"status": "INVOKED", "context_units": []}}}
+    debug["effective_context_snapshot"] = snapshot
+    opener = FakeOpener([FakeResponse(200, raw_body=stream_body(debug=debug))])
+    result = FastAPITransport("http://test.invalid", opener=opener).send_turn("c1", "hello")
+    assert result["trace"]["effective_context_snapshot"] == snapshot
+
+
 def stream_body(*, answer: str = "你好", debug: dict | None = None) -> bytes:
     events = [
         ("start", {"response_id": "r1"}),

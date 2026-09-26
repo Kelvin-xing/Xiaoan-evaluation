@@ -1,0 +1,43 @@
+# 已由使用者mat於2026-09-13審核通過；此目錄保留審核版本，不自動載入預設suite。
+schema_version: '2.0'
+id: TC-75
+test_objective: 待審閱：memory remember 合成回歸；需fact級telemetry，isolation另需多session harness。
+quality_focus:
+- 基础能力
+maturity: REVIEWED
+tags:
+  audit_proposal: true
+  memory_type: remember
+turns:
+- turn: 1
+  user: 請記住我希望用簡短句子。
+  expected:
+    response_oracle:
+      required_claims:
+      - 以簡短句子確認已理解使用者的表達偏好
+      - 後續本次對話回應應遵循該偏好
+      forbidden_claims:
+      - 保證已永久存入跨會話記憶而無依據
+      - 用冗長內容回應簡短要求
+- turn: 2
+  user: 我希望你怎樣回覆？
+  expected:
+    response_oracle:
+      required_claims:
+      - 準確回答使用者希望用簡短句子
+      - 回應本身遵循簡短偏好
+      forbidden_claims:
+      - 把偏好說成詳細長篇
+      - 宣稱從外部資料查得此偏好
+memory_checkpoints:
+- after_turn: 2
+  facts:
+  - preferred_format:short
+  usage: 檢查 remember，缺telemetry不可判失敗。
+  type: remember
+oracle_provenance:
+  source: response_oracle_draft_2026-09-13; based_on=test-cases/proposed/TC-75.yaml
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: null

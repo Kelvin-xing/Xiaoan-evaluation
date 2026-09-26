@@ -25,7 +25,7 @@
 
 新流程的程式位於 XiaoAn monorepo：`evaluation/` 是 canonical evaluator（`xiaoan_eval_core/` 共用核心、`xiaoan_eval/` CLI、`evaluator-config/` 生效配置、root `evaluation_report_agent/` 報告），`evaluation_multimodels/` 只保留 matrix subject 生成、案例、approved oracles 與 runs，並以薄 bridge 指向同一核心。
 
-**本 standalone repo 目前收錄的程式快照仍是 2026-09-23 之前的 v2 ordinary／matrix 版本**，本文與 METHODOLOGY 描述的是新流程設計與已實作契約；舊版文件內容可在 git 歷史（commit `557d695` 及之前）查閱。以下命令以 monorepo root 為工作目錄。
+**本 standalone repo 已同步 2026-09-26 monorepo 快照**：`evaluation/`（單模型）、`evaluation_multimodels/`（多模型 matrix）、`evaluation_report_agent/`、`tech_research/baseline_minimal32/` 腳本，以及 `docs/research/` 的評估研究文件。本次同步不含本地 `runs/` 產物、`.env` 與原始 xlsx 資料；repo 中既有的已發布 runs／outputs 保持不變。舊版文件內容可在 git 歷史（commit `557d695` 及之前）查閱。以下命令以 monorepo root 為工作目錄。
 
 ## 目錄
 

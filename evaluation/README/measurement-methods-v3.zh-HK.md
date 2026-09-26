@@ -1,5 +1,7 @@
 # 評估方法 v3：操作與資料契約
 
+> **2026-09-22 新增：** `measure unified` 共用一次抽取的 claim 清單，分開支持／正確性／安全任務 gate；`measure capsule-ablation` 提供固定 Composer context 對照。新版本不改寫舊分數。完整合約、命令、人工校準與 live 驗證邊界見 [evaluation-unified-v1](../../docs/implementation/evaluation-unified-v1.md)。
+
 此版本實作稽核中九類方法的程式入口，兩個project均可使用。**程式與合成測試完成，不代表人工gold、正式檢索標註、真實工具觀測或線上研究已完成。** 不使用DeepEval API，也不自動啟動付費評估或部署流量。
 
 ## 執行
@@ -48,8 +50,8 @@ matrix請求包含同一契約，row與checkpoint保存assessment，`Measurement
 
 ## 檢索公式與主流程
 
-- Precision@k = top-k相關個數/k；不足k個候選仍以k為分母。
-- Recall@k = top-k相關個數/完整gold相關個數。
+本專案已移除 Precision@k 與 Recall@k 的計算及輸出。以下排序診斷仍為可選能力，不代表一般 Chatflow 評估會有有效數值。
+
 - RR@k = top-k第一個相關項排名倒數；有相關gold但沒有命中為0。
 - AP@k = 各相關位置的precision總和 / min(完整相關個數,k)。這是截斷版本，不能當全庫AP；跨query平均為MAP@k。
 - nDCG@k = DCG/IDCG，採明確的linear relevance gain及log2(rank+1)折扣。

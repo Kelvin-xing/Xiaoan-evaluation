@@ -11,6 +11,9 @@ from pathlib import Path
 import threading
 from typing import Mapping, Sequence
 
+from .scenario_analysis import build_analysis, attach_to_model, append_matrix_sheets
+from .knowledge_diagnostics import build_knowledge_diagnostics, detail_rows
+from .cost_analysis import build_cost_analysis
 from .measurement_cli import register as register_measurements, run as run_measurement
 from .auto_experiment import run_auto_experiment, run_auto_file_experiment
 from .attribution_client import AttributionClient
@@ -34,13 +37,12 @@ from .stability import summarize_stability
 from .transport import FastAPITransport
 from .deliverables import (
     publish_deliverables,
-    render_decision_report,
     validate_pair,
     validate_output_target,
 )
 from .report_model import build_model_from_rows, build_report_model
 from .review_workbook import adjudicate_workbook, export_review_workbook, import_review_workbook
-from .multimodel import default_judge_specs, default_subject_specs, run_matrix, render_matrix_report, write_matrix_workbook, write_pair_workbooks, ModelSpec
+from .multimodel import default_judge_specs, default_subject_specs, run_matrix, write_matrix_workbook, write_pair_workbooks, ModelSpec
 
 
 PREFLIGHT_ARTIFACTS = {
@@ -51,6 +53,16 @@ PREFLIGHT_ARTIFACTS = {
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    from .report_agent import configure, preflight, render_existing
+    configure(plugin=getattr(args, "report_agent_plugin", None),
+              definitions=getattr(args, "metric_definitions", None),
+              max_steps=getattr(args, "report_agent_max_steps", 48),
+              context_chars=getattr(args, "report_agent_context_chars", 240000))
+    if args.command not in {"preflight", "measure", "export-human-review"}:
+        preflight()
+    if args.command == "report-workbook":
+        render_existing(Path(args.workbook), Path(args.output))
+        return 0
     if args.command == "measure":
         return run_measurement(args)
     if args.command == "preflight":
@@ -83,6 +95,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="xiaoan-eval")
     commands = parser.add_subparsers(dest="command", required=True)
     register_measurements(commands)
+    workbook_report = commands.add_parser("report-workbook", help="generate an LLM report from an existing XLSX without rerunning evaluation")
+    workbook_report.add_argument("workbook")
+    workbook_report.add_argument("--output", required=True, help="destination Markdown file")
     preflight = commands.add_parser("preflight", help="validate cases without running the SUT")
     preflight.add_argument("cases")
     preflight.add_argument("--rating-rule", default="ratings rule.yml")
@@ -92,7 +107,7 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("results")
     report.add_argument("--output", required=True)
     report.add_argument("--pii-validator", metavar="MODULE:CALLABLE")
-    report.add_argument("--recommendation-plugin", metavar="MODULE:CALLABLE")
+    report.add_argument("--recommendation-plugin", metavar="MODULE:CALLABLE", help="deprecated: final recommendations are now authored by Report Agent")
     report.add_argument("--compact", action="store_true", help="deprecated compatibility option; the output is always the two-file pair")
     run = commands.add_parser("run", help="execute cases against XiaoAn and render reports")
     run.add_argument("cases")
@@ -110,7 +125,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--config", default="evaluator-config.yml")
     run.add_argument("--baseline")
     run.add_argument("--release-review", action="store_true")
-    run.add_argument("--recommendation-plugin", metavar="MODULE:CALLABLE")
+    run.add_argument("--recommendation-plugin", metavar="MODULE:CALLABLE", help="deprecated: final recommendations are now authored by Report Agent")
     run.add_argument("--compact", action="store_true", help="deprecated compatibility option; the output is always the two-file pair")
     run.add_argument("--suite-id", default="canonical")
     run.add_argument("--suite-version", default="1")
@@ -172,7 +187,7 @@ def _parser() -> argparse.ArgumentParser:
     adjudicate.add_argument("--adjudicator", required=True, help="self-declared operational label; not authenticated")
     adjudicate.add_argument("--rationale", required=True)
     adjudicate.add_argument("--rating-rule", default="ratings rule.yml")
-    matrix = commands.add_parser("matrix", help="run the 10x5 XiaoAn subject/judge model matrix")
+    matrix = commands.add_parser("matrix", help="run the 6x3 XiaoAn subject/judge model matrix")
     matrix.add_argument("cases", help="directory containing YAML test cases")
     matrix.add_argument("--output", required=True, help="directory for report.md and results.xlsx")
     matrix.add_argument("--subject-transport", required=True, metavar="MODULE:CALLABLE")
@@ -187,10 +202,24 @@ def _parser() -> argparse.ArgumentParser:
     matrix.add_argument("--checkpoint", help="private checkpoint path (default: sibling .matrix-audit directory)")
     matrix.add_argument("--allow-legacy-checkpoint", action="store_true", help="explicitly trust a pre-contract-hash checkpoint")
     matrix.add_argument("--isolate-self-judging", action=argparse.BooleanOptionalAction, default=True, help="exclude subject/judge self-evaluations from primary aggregates")
-    matrix.add_argument("--subject-concurrency", type=int, default=2, help="parallel independent subject/case lanes (default: 2)")
-    matrix.add_argument("--judge-concurrency", type=int, default=3, help="parallel stateless Judge calls per answer (default: 3)")
-    matrix.add_argument("--max-in-flight", type=int, default=3, help="hard cap for all simultaneous provider calls (default: 3)")
-    matrix.add_argument("--per-provider-concurrency", type=int, default=1, help="simultaneous calls allowed per provider (default: 1)")
+    matrix.add_argument("--subject-concurrency", type=int, default=None, help="parallel independent subject/case lanes (default: .env XIAOAN_SUBJECT_CONCURRENCY)")
+    matrix.add_argument("--judge-concurrency", type=int, default=None, help="parallel stateless Judge calls per answer (default: .env XIAOAN_JUDGE_CONCURRENCY)")
+    matrix.add_argument("--max-in-flight", type=int, default=None, help="hard cap for all simultaneous provider calls (default: .env XIAOAN_MAX_IN_FLIGHT)")
+    matrix.add_argument("--per-provider-concurrency", type=int, default=None, help="override all provider limits; defaults come from .env XIAOAN_<PROVIDER>_MAX_CONCURRENCY")
+    matrix.add_argument("--pricing-catalog", help="pricing catalog JSON for offline cost-quality analysis")
+    for target in (report, run, matrix):
+        target.add_argument("--scenario-analysis", action="store_true", help="offline scenario/claim diagnostics; no additional provider calls")
+        target.add_argument("--scenario-annotations", help="scenario-annotations/v1 JSON bound to user prefixes")
+        target.add_argument("--answer-analysis", help="answer-analysis/v1 local AR sidecar bound to subject/answer/context")
+        target.add_argument("--analysis-subject-id", help="stable subject identity for single-model sidecar binding")
+        target.add_argument("--knowledge-review", help="knowledge-review/v1 reviewed requirement and capsule-gap evidence")
+    for name, command in commands.choices.items():
+        if name in {"preflight", "measure", "export-human-review"}:
+            continue
+        command.add_argument("--report-agent-plugin", metavar="MODULE:CALLABLE", help="override the configured LLM report provider")
+        command.add_argument("--metric-definitions", help="override the mandatory bundled metric dictionary")
+        command.add_argument("--report-agent-max-steps", type=int, default=48)
+        command.add_argument("--report-agent-context-chars", type=int, default=240000)
     return parser
 
 
@@ -207,6 +236,11 @@ def _matrix(args: argparse.Namespace) -> int:
     attribution_provider = _load_plugin(args.attribution_judge_plugin) if getattr(args, "attribution_judge_plugin", None) else None
     subject_specs = _load_matrix_specs(args.subjects, default_subject_specs())
     judge_specs = _load_matrix_specs(args.judges, default_judge_specs())
+    from xiaoan_eval_core import model_config
+    for spec in subject_specs:
+        model_config.validate_matrix_model(spec.provider, spec.model)
+    for spec in judge_specs:
+        model_config.validate_matrix_model(spec.provider, spec.model, judge=True)
     audit_checkpoint = output.parent / ".matrix-audit" / output.name / "matrix-checkpoint.jsonl"
     legacy_checkpoint = output / "matrix-checkpoint.jsonl"
     configured_checkpoint = getattr(args, "checkpoint", None)
@@ -229,17 +263,32 @@ def _matrix(args: argparse.Namespace) -> int:
         resume=bool(getattr(args, "resume", False)),
         retry_unavailable=bool(getattr(args, "retry_unavailable", False)),
         allow_legacy_checkpoint=bool(getattr(args, "allow_legacy_checkpoint", False)),
-        subject_concurrency=int(getattr(args, "subject_concurrency", 2)),
-        judge_concurrency=int(getattr(args, "judge_concurrency", 3)),
-        max_in_flight=int(getattr(args, "max_in_flight", 3)),
-        per_provider_concurrency=int(getattr(args, "per_provider_concurrency", 1)),
+        subject_concurrency=getattr(args, "subject_concurrency", None),
+        judge_concurrency=getattr(args, "judge_concurrency", None),
+        max_in_flight=getattr(args, "max_in_flight", None),
+        per_provider_concurrency=getattr(args, "per_provider_concurrency", None),
         isolate_self_judging=bool(getattr(args, "isolate_self_judging", True)),
         attribution_provider=attribution_provider,
         attribution_judge_version=str(getattr(args, "attribution_judge_version", "attribution-judge/v1")),
     )
-    write_matrix_workbook(rows, output / "results.xlsx")
-    write_pair_workbooks(rows, output / "pairs")
-    (output / "report.md").write_text(render_matrix_report(rows), encoding="utf-8")
+    analysis = build_analysis(rows, cases=cases, annotations_path=getattr(args, "scenario_annotations", None),
+                              analysis_path=getattr(args, "answer_analysis", None))
+    from .report_agent import generate_report
+    from .deliverables import _locked
+    import os
+    import tempfile
+    with _locked(output.parent / f".{output.name}.evaluation.lock"):
+        with tempfile.TemporaryDirectory(prefix=f".{output.name}.stage-", dir=output.parent) as temporary:
+            staged = Path(temporary)
+            write_matrix_workbook(rows, staged / "results.xlsx", analysis=analysis)
+            report_text = generate_report(
+                staged / "results.xlsx", audit_dir=output.parent / f".{output.name}.report-agent-audit",
+            )
+            (staged / "report.md").write_text(report_text, encoding="utf-8")
+            write_pair_workbooks(rows, output / "pairs", analysis=analysis)
+            for name in ("results.xlsx", "report.md"):
+                (staged / name).chmod(0o600)
+                os.replace(staged / name, output / name)
     return 0 if rows and all(row["status"] == "PASS" for row in rows) else 1
 
 
@@ -273,14 +322,49 @@ def _preflight(args: argparse.Namespace) -> int:
     return 2 if any(row["status"] == "invalid" for row in rows) else 0
 
 
+def _append_simple_sheet(path, name, rows):
+    from openpyxl import load_workbook
+    book = load_workbook(path)
+    if name in book:
+        del book[name]
+    sheet = book.create_sheet(name)
+    rows = list(rows)
+    headers = list(dict.fromkeys(key for row in rows for key in row)) if rows else ["status"]
+    sheet.append(headers)
+    for row in rows:
+        sheet.append([json.dumps(row.get(key), ensure_ascii=False) if isinstance(row.get(key), (dict, list)) else row.get(key) for key in headers])
+    sheet.freeze_panes = "A2"
+    book.save(path)
+
+
+def _scenario_report(args, records, model):
+    if not any(getattr(args, name, None) for name in ("scenario_analysis", "scenario_annotations", "answer_analysis", "knowledge_review")):
+        return model, ""
+    analysis = build_analysis(records, annotations_path=getattr(args, "scenario_annotations", None),
+                              analysis_path=getattr(args, "answer_analysis", None),
+                              subject_id=getattr(args, "analysis_subject_id", None))
+    _require_safe(analysis, _load_plugin(getattr(args, "pii_validator", None)), "scenario analysis")
+    model = attach_to_model(model, analysis)
+    knowledge = build_knowledge_diagnostics(analysis, getattr(args, "knowledge_review", None)) if getattr(args, "knowledge_review", None) else None
+    if knowledge:
+        from dataclasses import replace
+        from .workbook import HEADERS
+        extra = []
+        for i, row in enumerate(detail_rows(knowledge)):
+            extra.append({**dict.fromkeys(HEADERS["03_Metrics"]), "row_key": f"knowledge.{i}", "comparison_key": f"knowledge.{i}", "component_run_id": row.get("subject_id"), "case_id": row.get("case_id"), "turn": row.get("turn"), "metric_id": "knowledge." + row.get("detail_type", "detail"), "dimension": row.get("capsule_support", row.get("gap", "diagnostic")), "status": "AVAILABLE", "reason": json.dumps(row, ensure_ascii=False, sort_keys=True), "score_source": "knowledge-diagnostics/v1"})
+        model = replace(model, metrics=tuple(model.metrics) + tuple(extra))
+    return model, ""  # Analysis facts go into XLSX; prose is authored by Report Agent.
+
+
 def _report(args: argparse.Namespace) -> int:
     records = _read_jsonl(Path(args.results))
     output = Path(args.output)
     validate_output_target(output)
     validator = _load_plugin(args.pii_validator)
-    recommendations = _build_recommendations(records, validator, _load_plugin(args.recommendation_plugin))
+    recommendations = []  # Product recommendations are authored from XLSX by Report Agent.
     model = build_report_model(records, recommendations=recommendations, pii_validator=validator)
-    publish_deliverables(model, output, render_decision_report(model))
+    model, scenario_text = _scenario_report(args, records, model)
+    publish_deliverables(model, output)
     return 0
 
 
@@ -296,6 +380,10 @@ def _run(args: argparse.Namespace) -> int:
     manifest_data = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     if not isinstance(manifest_data, dict):
         raise ValueError("manifest must be a JSON object")
+    from xiaoan_eval_core import model_config
+    live_models = {role: model_config.model(f"XIAOAN_{role.upper()}_MODEL")
+                   for role in ("safety", "router", "response", "judge")}
+    manifest_data["model_ids"] = live_models
     manifest = RunManifest(**manifest_data)
     if manifest.rating_rule_schema_version != rule.schema_version:
         raise ValueError(
@@ -330,7 +418,7 @@ def _run(args: argparse.Namespace) -> int:
     )
 
     def evaluate_case(case):
-        with FastAPITransport(args.base_url) as transport:
+        with FastAPITransport(args.base_url, models=live_models) as transport:
             primary = JudgeClient(primary_provider, rule)
             secondary = JudgeClient(secondary_provider, rule) if secondary_provider is not None else None
             attribution_client = AttributionClient(attribution_provider, judge_version=args.attribution_judge_version) if attribution_provider is not None else None
@@ -349,11 +437,10 @@ def _run(args: argparse.Namespace) -> int:
         max_workers=args.case_concurrency,
     )
 
+    records = [{**record, "subject_id": record.get("subject_id") or manifest.model_ids.get("response")} for record in records]
     manifest_payload = {**manifest.to_dict(), "fingerprint": manifest.fingerprint, "scoring_contract_version": SCORING_CONTRACT_VERSION}
     _require_safe(manifest_payload, validator, "manifest")
-    recommendations = _build_recommendations(
-        records, validator, _load_plugin(args.recommendation_plugin)
-    )
+    recommendations = []  # Report Agent owns the final product recommendations.
     model = build_report_model(
         records,
         manifest=manifest_payload,
@@ -377,7 +464,8 @@ def _run(args: argparse.Namespace) -> int:
                 suite, records, rule, suite_execution_facts
             ),
         )
-    publish_deliverables(model, output, render_decision_report(model))
+    model, scenario_text = _scenario_report(args, records, model)
+    publish_deliverables(model, output)
     return 1 if any(record["status"] != "PASS" for record in records) else 0
 
 
@@ -614,7 +702,7 @@ def _experiment(args: argparse.Namespace) -> int:
         stability=facts.stability,
         text_content=facts.text_content,
     )
-    publish_deliverables(model, output, render_decision_report(model))
+    publish_deliverables(model, output)
     return 0
 
 
@@ -652,7 +740,7 @@ def _stability(args: argparse.Namespace) -> int:
         stability=stability_rows,
         text_content=facts.text_content,
     )
-    publish_deliverables(model, output, render_decision_report(model))
+    publish_deliverables(model, output)
     return 0
 
 
@@ -720,7 +808,7 @@ def _attach_auto_experiment(facts, output: Path, report: Mapping[str, object]) -
         human_review=facts.human_review, stability=facts.stability,
         text_content=facts.text_content,
     )
-    publish_deliverables(model, output, render_decision_report(model))
+    publish_deliverables(model, output)
 
 
 def _export_human_review(args: argparse.Namespace) -> int:
@@ -731,7 +819,7 @@ def _export_human_review(args: argparse.Namespace) -> int:
 def _import_human_review(args: argparse.Namespace) -> int:
     output = Path(args.output)
     model = import_review_workbook(Path(args.packet), output, load_rating_rule(args.rating_rule))
-    publish_deliverables(model, output, render_decision_report(model))
+    publish_deliverables(model, output)
     return 1 if model.artifact_state == "NEEDS_ADJUDICATION" else 0
 
 
@@ -742,7 +830,7 @@ def _adjudicate(args: argparse.Namespace) -> int:
         adjudicator_id=args.adjudicator, rationale=args.rationale,
         rule=load_rating_rule(args.rating_rule),
     )
-    publish_deliverables(model, output, render_decision_report(model))
+    publish_deliverables(model, output)
     return 1 if model.artifact_state == "NEEDS_ADJUDICATION" else 0
 
 

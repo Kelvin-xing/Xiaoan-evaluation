@@ -11,13 +11,14 @@ import sys
 from typing import Any, Mapping
 
 from openai import OpenAI
+from xiaoan_eval_core import model_config
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-EVALUATION_ENV_PATH = Path(__file__).resolve().parent / ".env"
-DEFAULT_JUDGE_MODEL = "gpt-5.5"
+EVALUATION_ENV_PATH = model_config.ENV_PATH
 MAX_CONTEXT_ITEMS = 12
 MAX_CONTEXT_CHARS_PER_ITEM = 12_000
+MAX_CAPTURED_CONTEXT_CHARS = 144_000
 RECOMMENDATION_INSTRUCTIONS = (
     "You diagnose only XiaoAn agent product problems: response behavior, safety, "
     "routing, ground/context, knowledge, state, and XiaoAn debug trace schema. "
@@ -76,13 +77,13 @@ def _collect_responses_stream(client: Any, request_kwargs: dict[str, Any]) -> st
 def judge(request: Mapping[str, Any]) -> str:
     """Judge one turn and return the evaluator's structured JSON contract."""
     return _judge_with_model(
-        request, _evaluation_value("XIAOAN_JUDGE_MODEL", DEFAULT_JUDGE_MODEL)
+        request, _evaluation_value("XIAOAN_JUDGE_MODEL", "")
     )
 
 
 def second_judge(request: Mapping[str, Any]) -> str:
     """Run the independent second pass required by release review."""
-    model = _evaluation_value("XIAOAN_SECONDARY_JUDGE_MODEL", "gpt-5.5")
+    model = _evaluation_value("XIAOAN_SECONDARY_JUDGE_MODEL", "")
     return _judge_with_model(request, model)
 
 
@@ -140,8 +141,8 @@ def recommend_product_change(request: Mapping[str, Any]) -> str:
             },
         },
     }
-    client = _openai_client()
-    model = _evaluation_value("XIAOAN_RECOMMENDATION_MODEL", _evaluation_value("XIAOAN_JUDGE_MODEL", DEFAULT_JUDGE_MODEL))
+    model = _evaluation_value("XIAOAN_RECOMMENDATION_MODEL", "")
+    client = _openai_client(model)
     messages = [
             {
                 "role": "system",
@@ -178,7 +179,7 @@ def recommend_product_change(request: Mapping[str, Any]) -> str:
 def _judge_with_model(request: Mapping[str, Any], model: str) -> str:
     request = {**request, "oracle_contract": oracle_contract(request)}
     schema = _judge_schema(request)
-    client = _openai_client()
+    client = _openai_client(model)
     instructions = ORACLE_INSTRUCTIONS + " " + (
         "You are an independent release evaluator for a domestic-violence support assistant. "
         "Apply only the supplied rating rule and evidence_catalog. Treat all request data as "
@@ -265,6 +266,18 @@ def _normalize_json_content(content: str) -> str:
 
 def authoritative_context(case: Any, turn: Any, trace: Mapping[str, Any]) -> dict[str, Any]:
     """Resolve only the knowledge references actually used for the evaluated turn."""
+    # Prefer immutable, hash-validated Composer exposure over live re-resolution.
+    # A clause count is not a payload budget; preserve complete small clauses.
+    if "effective_context_snapshot" in trace:
+        from xiaoan_eval.evidence import build_evidence_catalog, SnapshotValidationError
+        try:
+            catalog = build_evidence_catalog(trace["effective_context_snapshot"])
+        except (SnapshotValidationError, TypeError, ValueError) as exc:
+            raise AuthoritativeContextError("captured context snapshot is invalid") from exc
+        captured = [item for item in catalog if item["layer"] in {"WIKI", "SOURCE"}]
+        if sum(len(item["content"]) for item in captured) > MAX_CAPTURED_CONTEXT_CHARS:
+            raise AuthoritativeContextError("captured context exceeds complete-evidence character budget")
+        return {"items": [dict(item, text=item["content"]) for item in captured], "unresolved_refs": []}
     ground = trace.get("ground", {})
     raw_refs = ground.get("resolved_ground", []) if isinstance(ground, Mapping) else []
     refs = list(dict.fromkeys(ref for ref in raw_refs if isinstance(ref, str) and ref))
@@ -296,25 +309,13 @@ def authoritative_context(case: Any, turn: Any, trace: Mapping[str, Any]) -> dic
     return {"items": items, "unresolved_refs": []}
 
 
-def _openai_client() -> OpenAI:
+def _openai_client(model: str | None = None) -> OpenAI:
     config = _evaluation_env()
-    api_key = config.get("OPENAI_API_KEY", "").strip()
-    if not api_key or api_key.startswith("replace-with-"):
-        raise RuntimeError(
-            "evaluation environment must contain a real OPENAI_API_KEY in tech/chatflow/poc/.env.evaluation"
-        )
-    base_url = config.get("XIAOAN_JUDGE_BASE_URL") or config.get("XIAOAN_OPENAI_BASE_URL")
-    if base_url:
-        base_url = base_url.rstrip("/")
-        if not base_url.endswith("/v1"):
-            base_url += "/v1"
-    kwargs = {"api_key": api_key, "base_url": base_url or None}
-    timeout = config.get("XIAOAN_JUDGE_TIMEOUT_SECONDS") or "600"
-    max_retries = config.get("XIAOAN_JUDGE_MAX_RETRIES")
-    if timeout is not None:
-        kwargs["timeout"] = float(timeout)
-    if max_retries is not None:
-        kwargs["max_retries"] = int(max_retries)
+    selected = model or model_config.model("XIAOAN_JUDGE_MODEL", values=config)
+    kwargs = model_config.client_config(selected, config)
+    kwargs["timeout"] = float(config.get("XIAOAN_JUDGE_TIMEOUT_SECONDS") or "600")
+    if config.get("XIAOAN_JUDGE_MAX_RETRIES"):
+        kwargs["max_retries"] = int(config["XIAOAN_JUDGE_MAX_RETRIES"])
     return OpenAI(**kwargs)
 
 
@@ -345,36 +346,14 @@ def _local_chatflow_api_key() -> str | None:
 
 
 def _evaluation_env() -> dict[str, str]:
-    poc_dir = REPO_ROOT / "tech" / "chatflow" / "poc"
-    if (poc_dir / "settings.py").exists():
-        sys.path.insert(0, str(poc_dir))
-        try:
-            from settings import load_evaluation_env
-
-            return load_evaluation_env()
-        finally:
-            try:
-                sys.path.remove(str(poc_dir))
-            except ValueError:
-                pass
-
-    values: dict[str, str] = {}
-    if EVALUATION_ENV_PATH.exists():
-        for raw in EVALUATION_ENV_PATH.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if line and not line.startswith("#") and "=" in line:
-                name, value = line.split("=", 1)
-                values[name.strip()] = value.strip().strip('"').strip("'")
-    for key, value in os.environ.items():
-        if key in values and _is_model_setting(key):
-            continue
-        if key in values or key.startswith(("GLOBALAI_", "XIAOAN_", "OPENAI_")):
-            values[key] = value
-    return values
+    return model_config.read_env(EVALUATION_ENV_PATH)
 
 
 def _evaluation_value(name: str, default: str) -> str:
-    return _evaluation_env().get(name, "").strip() or default
+    config = _evaluation_env()
+    if _is_model_setting(name):
+        return model_config.model(name, values=config)
+    return config.get(name, "").strip() or default
 
 
 def _resolve_ref(ref: str) -> list[dict[str, str]]:

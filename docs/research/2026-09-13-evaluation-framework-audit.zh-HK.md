@@ -1,6 +1,6 @@
 # XiaoAn Agent 評估方法與兩套 evaluator 審閱
 
-日期：2026-09-13。審閱對象：本機 `<workspace>/xiaoan` **當前工作樹**，包括未提交檔案；不是只看 HEAD，也不是對某次私有 run 的評分覆核。
+日期：2026-09-13。審閱對象：本機 `/Users/mingjiexing/xiaoan` **當前工作樹**，包括未提交檔案；不是只看 HEAD，也不是對某次私有 run 的評分覆核。
 
 配套文件：
 
@@ -355,8 +355,8 @@ validity_status: NOT_CALIBRATED
 
 ```bash
 # 任意cwd皆可；腳本會切到指定project，兩套需分開process避免同名package快取。
-/Users/mingjiexing/anaconda3/bin/python3 <workspace>/xiaoan/docs/research/2026-09-13-evaluation-audit-probes.py <workspace>/xiaoan/evaluation
-/Users/mingjiexing/anaconda3/bin/python3 <workspace>/xiaoan/docs/research/2026-09-13-evaluation-audit-probes.py <workspace>/xiaoan/evaluation_multimodels
+/Users/mingjiexing/anaconda3/bin/python3 /Users/mingjiexing/xiaoan/docs/research/2026-09-13-evaluation-audit-probes.py /Users/mingjiexing/xiaoan/evaluation
+/Users/mingjiexing/anaconda3/bin/python3 /Users/mingjiexing/xiaoan/docs/research/2026-09-13-evaluation-audit-probes.py /Users/mingjiexing/xiaoan/evaluation_multimodels
 ```
 
 關鍵觀察：error quality=0並進overview；低分quality=1仍PASS；not_use被判fail；unsupported required claim給unsupported rate=0；空route oracle accuracy=0；false/false goal給completion=1；常數alpha=1；動態/base/focus總分0.743119/0.54/3；matrix [0,0,3] Markdown=0而Excel=1；缺memory telemetry use/isolation=fail。

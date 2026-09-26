@@ -179,7 +179,7 @@ def _output_contract() -> dict[str, Any]:
             "additionalProperties": False,
             "required": ["contract_version", "claims", "policies", "abstention"],
             "properties": {
-                "contract_version": {"const": "attribution/v1"},
+                "contract_version": {"type": "string", "const": "attribution/v1"},
                 "claims": {
                     "type": "array",
                     "items": {
@@ -196,6 +196,7 @@ def _output_contract() -> dict[str, Any]:
                         "properties": {
                             "claim_id": {"type": "string", "minLength": 1},
                             "kind": {
+                                "type": "string",
                                 "enum": [
                                     "FACTUAL",
                                     "INTERPRETIVE",
@@ -218,6 +219,7 @@ def _output_contract() -> dict[str, Any]:
                                     ],
                                     "properties": {
                                         "relation": {
+                                            "type": "string",
                                             "enum": [
                                                 "ENTAILS",
                                                 "PARTIAL",
@@ -236,6 +238,7 @@ def _output_contract() -> dict[str, Any]:
                                 },
                             },
                             "unsupported_category": {
+                                "type": ["string", "null"],
                                 "enum": [
                                     "UNVERIFIABLE_UNSUPPORTED",
                                     "PERMITTED_INFERENCE",
@@ -243,7 +246,7 @@ def _output_contract() -> dict[str, Any]:
                                     None,
                                 ]
                             },
-                            "uncertainty": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+                            "uncertainty": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
                         },
                     },
                 },
@@ -264,9 +267,11 @@ def _output_contract() -> dict[str, Any]:
                             "policy_id": {"type": "string", "minLength": 1},
                             "evidence_ref": {"type": "string", "minLength": 1},
                             "applicability": {
+                                "type": "string",
                                 "enum": ["APPLICABLE", "NOT_APPLICABLE", "UNCERTAIN"]
                             },
                             "compliance": {
+                                "type": "string",
                                 "enum": [
                                     "COMPLIANT",
                                     "PARTIAL",
@@ -276,7 +281,7 @@ def _output_contract() -> dict[str, Any]:
                                 ]
                             },
                             "answer_spans": {"type": "array", "items": span},
-                            "uncertainty": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+                            "uncertainty": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
                         },
                     },
                 },
@@ -285,7 +290,7 @@ def _output_contract() -> dict[str, Any]:
                     "additionalProperties": False,
                     "required": ["status", "reason"],
                     "properties": {
-                        "status": {"enum": ["ANSWERED", "ABSTAINED"]},
+                        "status": {"type": "string", "enum": ["ANSWERED", "ABSTAINED"]},
                         "reason": {"type": ["string", "null"]},
                     },
                 },

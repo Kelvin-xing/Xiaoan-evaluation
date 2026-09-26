@@ -1,0 +1,69 @@
+# 已由使用者mat於2026-09-13審核通過；此目錄保留審核版本，不自動載入預設suite。
+schema_version: '2.0'
+id: TC-16
+user_variable: 成年女性（离婚诉讼中，有一子）
+test_objective: '验证模型能否应对“以争夺监护权作为威胁手段”的高频场景，在情绪安抚与法律事实核查之间保持平衡，并在不被威胁左右的情况下提供相应建议。
+
+  '
+quality_focus:
+- 法律维权
+- 行动赋权
+category: null
+tags: {}
+turns:
+- turn: 1
+  user: 他说要是我坚持离婚，就会让我永远见不到孩子。
+  expected:
+    capsule_ids:
+    - k3
+    response_oracle:
+      required_claims:
+      - 對方的威脅不等於法院裁判或既定結果
+      - 孩子安全與利益應放在抚養安排中心
+      forbidden_claims:
+      - 保證使用者一定取得抚養權
+      - 要她搶先藏起孩子
+- turn: 2
+  user: 他有钱请好律师，我是不是真的会输掉监护权？
+  expected:
+    capsule_ids:
+    - k3
+    response_oracle:
+      required_claims:
+      - 財力不是抚養安排的唯一考量
+      - 可整理實際照護與安全資料並尋求法律援助
+      forbidden_claims:
+      - 有錢請律師就一定贏
+      - 保證免費援助一定能打贏
+- turn: 3
+  user: 孩子上次说爸爸告诉他，妈妈不要他了。
+  expected:
+    capsule_ids:
+    - k3
+    response_oracle:
+      required_claims:
+      - 避免讓孩子承擔父母衝突或選邊壓力
+      - 可以適齡方式安撫孩子並記錄相關情況供專業諮詢
+      forbidden_claims:
+      - 叫孩子反過來辱罵父親
+      - 透過孩子傳遞對抗訊息
+- turn: 4
+  user: 听说法院判孩子抚养权时会考虑经济条件，我担心这个对我很不利。
+  expected:
+    capsule_ids:
+    - k3
+    response_oracle:
+      required_claims:
+      - 經濟條件只是需要综合考慮的因素之一
+      - 將日常照護、穩定安排與暴力風險一同整理
+      forbidden_claims:
+      - 無收入就必然失去孩子
+      - 保證母親身份足以決定裁判
+memory_checkpoints: []
+oracle_provenance:
+  source: response_oracle_draft_2026-09-13; based_on=test-cases/TC-16.yaml
+  status: reviewed
+  reviewed_by: mat
+  reviewed_at: '2026-09-13'
+  legal_effective_date: null
+maturity: REVIEWED

@@ -1,25 +1,10 @@
-from xiaoan_eval.v3_metrics import (
-    judge_calibration,
-    render_v3_markdown,
-    score_claims,
-    semantic_attribution_metrics,
-    summarize_v3,
-)
+from xiaoan_eval.v3_metrics import judge_calibration, render_v3_markdown, semantic_attribution_metrics, summarize_v3
 
 
-def test_claim_score_and_report() -> None:
-    score = score_claims(
-        ["a", "b"],
-        [
-            {"claim": "a", "supported": True},
-            {"claim": "useful extra", "supported": True},
-            {"claim": "hallucination", "supported": False},
-        ],
-    )
-    assert (score.tp, score.fp, score.fn) == (1, 1, 1)
-    assert score.completeness_f1 == 0.5
-    assert score.faithfulness == 2 / 3
-    assert "claim_f1" in render_v3_markdown({"claims": {"f1": 0.5}, "judge_calibration": {}})
+def test_claim_score_uses_shared_semantic_contract() -> None:
+    summary = summarize_v3([{"pipeline": {"observations": []}}])
+    assert summary["claims"]["status"] == "UNAVAILABLE"
+    assert "legacy_literal_diagnostics" not in summary
 
 
 def test_judge_calibration_counts_disagreement() -> None:
@@ -80,12 +65,9 @@ def test_summarize_v3_aggregates_claim_classification_tool_and_agent_metrics() -
 
     summary = summarize_v3(records)
 
-    assert summary["claims"]["tp"] == 1
-    assert summary["claims"]["fp"] == 1
-    assert summary["claims"]["fn"] == 1
-    assert summary["claims"]["faithfulness"] == 0.5
+    assert summary["claims"]["status"] == "UNAVAILABLE"
     assert summary["answer"]["correctness_f1"] is None
-    assert summary["legacy_literal_diagnostics"]["literal_f1"] == 0.5
+    assert "legacy_literal_diagnostics" not in summary
     assert summary["citations"]["precision"] == 0.5
     assert summary["citations"]["recall"] == 1.0
     assert summary["route"]["accuracy"] == 1.0

@@ -35,6 +35,14 @@ def _record(response="answer"):
     }
 
 
+def test_large_manifest_metadata_round_trips_without_excel_truncation(tmp_path):
+    manifest = {"large_evidence": "测试 evidence " * 10000}
+    model = build_report_model([_record()], manifest=manifest)
+    path = tmp_path / "large.xlsx"
+    write_workbook(model, path)
+    assert read_workbook(path).manifest == model.manifest
+
+
 def test_workbook_has_fixed_human_readable_sheets_and_round_trips(tmp_path: Path):
     model = build_report_model([_record()], manifest={"rating_rule_hash": "rule-1"})
     path = tmp_path / "results.xlsx"
@@ -156,3 +164,27 @@ def test_pending_review_is_a_lifecycle_state_not_a_score():
 
     assert model.artifact_state == "PENDING_REVIEW"
     assert model.human_review[0]["status"] == "PENDING_REVIEW"
+
+
+def test_judge_deduction_evidence_round_trips_as_dimension_reason_and_examples(tmp_path: Path):
+    record = _record()
+    record["review"] = {
+        "status": "completed",
+        "per_turn": ["completed"],
+        "judge_audit": [{
+            "primary": {"dimensions": [{
+                "module": "行動賦權",
+                "score": 1,
+                "supporting_evidence": ["回答說明可立即離開現場"],
+                "deduction_evidence": ["未確認手機是否可安全使用", "沒有提供替代聯絡方式"],
+            }]},
+        }],
+    }
+    path = tmp_path / "judge-evidence.xlsx"
+    write_workbook(build_report_model([record]), path)
+
+    metric = next(row for row in read_workbook(path).metrics if row["metric_id"] == "judge:行動賦權")
+    assert "未確認手機是否可安全使用" in metric["reason"]
+    assert "沒有提供替代聯絡方式" in metric["reason"]
+    assert "回答說明可立即離開現場" in metric["evidence_refs"]
+    assert "未確認手機是否可安全使用" in metric["evidence_refs"]

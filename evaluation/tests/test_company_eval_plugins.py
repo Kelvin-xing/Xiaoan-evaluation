@@ -7,6 +7,17 @@ import company_eval_plugins
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def prohibit_unmocked_network(monkeypatch):
+    import httpx
+    def reject(*args, **kwargs):
+        pytest.fail('Unmocked synchronous HTTP transport')
+    async def reject_async(*args, **kwargs):
+        pytest.fail('Unmocked asynchronous HTTP transport')
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', reject)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', reject_async)
+
+
 SCORE_SCALE = [
     {"score": score, "description": f"anchor {score}"} for score in range(4)
 ]
@@ -41,7 +52,7 @@ def test_judge_requests_schema_constrained_json(monkeypatch) -> None:
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=FakeCompletions())
     )
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: fake_client)
+    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda *args: fake_client)
     monkeypatch.setattr(company_eval_plugins, "_evaluation_env", lambda: {"XIAOAN_JUDGE_MODEL": "judge-model"})
     monkeypatch.setenv("XIAOAN_JUDGE_MODEL", "judge-model")
     monkeypatch.setenv("XIAOAN_JUDGE_REASONING_EFFORT", "medium")
@@ -83,8 +94,9 @@ def test_responses_judge_uses_explicit_stable_prefix_cache_breakpoint(monkeypatc
             return [SimpleNamespace(type="response.output_text.delta", delta=payload), SimpleNamespace(type="response.completed", response=SimpleNamespace(usage=usage))]
 
     fake_client = SimpleNamespace(responses=FakeResponses())
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: fake_client)
+    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda *args: fake_client)
     monkeypatch.setattr(company_eval_plugins, "_evaluation_env", lambda: {
+        "XIAOAN_JUDGE_MODEL": "gpt-test",
         "XIAOAN_OPENAI_WIRE_API": "responses",
         "XIAOAN_PROMPT_CACHE_MODE": "explicit",
     })
@@ -120,7 +132,7 @@ def test_judge_accepts_provider_returning_structured_content_as_a_string(
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=FakeCompletions())
     )
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: fake_client)
+    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda *args: fake_client)
 
     result = company_eval_plugins.judge(
         {
@@ -150,7 +162,7 @@ def test_judge_unwraps_markdown_fenced_json_from_compatible_provider(
             return "```json\n" + json.dumps(expected) + "\n```"
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: fake_client)
+    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda *args: fake_client)
 
     result = company_eval_plugins.judge(
         {"rating_rule": {"score_scale": SCORE_SCALE, "red_lines": [], "quality_rubric": []}}
@@ -167,7 +179,7 @@ def test_judge_reports_non_json_provider_text_with_a_bounded_preview(
             return "Service Unavailable: model quota exhausted"
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
-    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda: fake_client)
+    monkeypatch.setattr(company_eval_plugins, "_openai_client", lambda *args: fake_client)
 
     with pytest.raises(RuntimeError, match="Service Unavailable: model quota exhausted"):
         company_eval_plugins.judge(
@@ -189,18 +201,10 @@ def test_second_judge_uses_independent_model(monkeypatch) -> None:
     assert seen == [({"case_id": "TC-01"}, "second-model")]
 
 
-def test_primary_judge_defaults_to_documented_model(monkeypatch) -> None:
-    captured = {}
-    monkeypatch.delenv("XIAOAN_JUDGE_MODEL", raising=False)
+def test_primary_judge_requires_shared_file_model(monkeypatch) -> None:
     monkeypatch.setattr(company_eval_plugins, "_evaluation_env", lambda: {})
-    monkeypatch.setattr(
-        company_eval_plugins,
-        "_judge_with_model",
-        lambda request, model: captured.update(model=model) or "{}",
-    )
-
-    assert company_eval_plugins.judge({"case_id": "TC-01"}) == "{}"
-    assert captured["model"] == "gpt-5.5"
+    with pytest.raises(ValueError, match="XIAOAN_JUDGE_MODEL"):
+        company_eval_plugins.judge({})
 
 
 def test_evaluation_env_falls_back_to_project_local_file(tmp_path, monkeypatch) -> None:
@@ -217,7 +221,7 @@ def test_evaluation_env_falls_back_to_project_local_file(tmp_path, monkeypatch) 
     values = company_eval_plugins._evaluation_env()
 
     assert values["XIAOAN_JUDGE_MODEL"] == "file-model"
-    assert values["OPENAI_API_KEY"] == "shell-key"
+    assert values["OPENAI_API_KEY"] == "file-key"
 
 
 def test_recommendation_prompt_requests_chinese_user_visible_text() -> None:
@@ -236,7 +240,8 @@ def test_openai_client_uses_shared_custom_base_url(monkeypatch) -> None:
         lambda **kwargs: captured.update(kwargs) or object(),
     )
     monkeypatch.setattr(company_eval_plugins, "_evaluation_env", lambda: {
-        "OPENAI_API_KEY": "test-key",
+        "XIAOAN_JUDGE_MODEL": "gpt-test",
+        "XIAOAN_OPENAI_API_KEY": "test-key",
         "XIAOAN_OPENAI_BASE_URL": "https://api.karoapi.com/v1",
     })
 
@@ -314,3 +319,30 @@ def test_authoritative_context_fails_closed_for_unresolved_refs(monkeypatch) -> 
         company_eval_plugins.authoritative_context(
             case=object(), turn=object(), trace={"ground": {"resolved_ground": ["missing"]}}
         )
+
+
+def test_captured_ground_is_complete_bounded_and_never_reresolved(monkeypatch):
+    import hashlib
+    def unit(index):
+        text = "Captured clause " + str(index)
+        return {"occurrence_id": f"source:{index}", "unit_id": f"source:{index}",
+                "layer": "SOURCE", "source_turn": 1, "content": text,
+                "content_sha256": "sha256:" + hashlib.sha256(text.encode()).hexdigest(), "policy_ids": []}
+    snapshot = {"schema_version": "effective-context-snapshot/v1", "snapshot_id": "frozen",
+                "turn": 1, "context_kind": "ordinary",
+                "router": {"status": "INVOKED", "units": [unit(99)]},
+                "composer": {"status": "INVOKED", "units": [unit(i) for i in range(37)]}}
+    def forbidden(_):
+        raise AssertionError("must not resolve frozen evidence against current repository")
+    monkeypatch.setattr(company_eval_plugins, "_resolve_ref", forbidden)
+    context = company_eval_plugins.authoritative_context(object(), object(),
+        {"effective_context_snapshot": snapshot, "ground": {"resolved_ground": [str(i) for i in range(37)]}})
+    assert len(context["items"]) == 37
+    assert context["items"][-1]["text"] == "Captured clause 36"
+    assert all(item["snapshot_id"] == "frozen" for item in context["items"])
+    monkeypatch.setattr(company_eval_plugins, "MAX_CAPTURED_CONTEXT_CHARS", 1)
+    with pytest.raises(company_eval_plugins.AuthoritativeContextError, match="budget"):
+        company_eval_plugins.authoritative_context(object(), object(), {"effective_context_snapshot": snapshot})
+    snapshot["composer"]["units"][0]["content"] = "changed"
+    with pytest.raises(company_eval_plugins.AuthoritativeContextError, match="invalid"):
+        company_eval_plugins.authoritative_context(object(), object(), {"effective_context_snapshot": snapshot})

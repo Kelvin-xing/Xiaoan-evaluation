@@ -1,72 +1,16 @@
 """Deterministic helpers for XiaoAn v3 claim and judge calibration metrics."""
 from __future__ import annotations
 
+from .reference_oracle import reviewed_expected
+
 from .oracle_judge import summarize as summarize_oracles
 from .measurement import cluster_interval
 
-from dataclasses import dataclass
 from collections import Counter
 import random
 from typing import Any, Mapping, Sequence
 
 from .attribution import summarize_semantic_attribution
-
-
-@dataclass(frozen=True)
-class ClaimScore:
-    tp: int
-    fp: int
-    fn: int
-
-    @property
-    def precision(self) -> float | None:
-        return self.tp / (self.tp + self.fp) if self.tp + self.fp else None
-
-    @property
-    def recall(self) -> float | None:
-        return self.tp / (self.tp + self.fn) if self.tp + self.fn else None
-
-    @property
-    def completeness_f1(self) -> float | None:
-        p, r = self.precision, self.recall
-        return 2 * p * r / (p + r) if p is not None and r is not None and p + r else None
-
-    supported_claims: int = 0
-    total_claims: int = 0
-
-    @property
-    def f1(self) -> float | None:
-        """Backward-compatible alias for completeness F1."""
-        return self.completeness_f1
-
-    @property
-    def faithfulness(self) -> float | None:
-        return self.supported_claims / self.total_claims if self.total_claims else None
-
-
-def score_claims(required: Sequence[str], judged: Sequence[Mapping[str, Any]]) -> ClaimScore:
-    """Score required-claim completeness separately from answer faithfulness."""
-    gold = {str(item) for item in required}
-    claim_rows = [
-        (str(item.get("claim")), item.get("supported") is True)
-        for item in judged
-        if isinstance(item.get("claim"), str) and str(item.get("claim")).strip()
-    ]
-    claims: dict[str, bool] = {}
-    for claim, supported in claim_rows:
-        claims[claim] = claims.get(claim, True) and supported
-    supported = {claim for claim, is_supported in claims.items() if is_supported}
-    unsupported_extras = {
-        claim for claim, is_supported in claims.items()
-        if not is_supported and claim not in gold
-    }
-    return ClaimScore(
-        len(gold & supported),
-        len(unsupported_extras),
-        len(gold - supported),
-        len(supported),
-        len(claims),
-    )
 
 
 def judge_calibration(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -102,9 +46,25 @@ def semantic_attribution_metrics(
     return summarize_semantic_attribution(turns)
 
 
+def _semantic_claim_summary(counts: Mapping[str, int]) -> dict[str, Any]:
+    eligible = sum(counts.get(key, 0) for key in ("entailed", "partial", "contradicted", "unsupported", "unknown"))
+    known = eligible - counts.get("unknown", 0)
+    return {
+        "status": "AVAILABLE" if eligible else "UNAVAILABLE",
+        "counts": {key: counts.get(key, 0) for key in ("ENTAILED", "PARTIAL", "CONTRADICTED", "UNSUPPORTED", "UNKNOWN", "NOT_APPLICABLE")},
+        "eligible_n": eligible, "known_n": known, "unknown_n": counts.get("unknown", 0),
+        "strict_rate": counts.get("entailed", 0) / eligible if eligible else None,
+        "known_support_rate": counts.get("entailed", 0) / known if known else None,
+        "known_coverage": known / eligible if eligible else None,
+        "partial_weighted_diagnostic": (counts.get("entailed", 0) + .5 * counts.get("partial", 0)) / eligible if eligible else None,
+        "contradiction_rate": counts.get("contradicted", 0) / eligible if eligible else None,
+        "scoring_contract": "xiaoan-unified/v1 semantic claim verdicts",
+    }
+
+
 def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Aggregate approved turn observations without inferring unavailable labels."""
-    claim_totals = ClaimScore(0, 0, 0, 0, 0)
+    """Aggregate observations using the shared semantic claim contract."""
+    semantic_claims = {"entailed": 0, "partial": 0, "contradicted": 0, "unsupported": 0, "unknown": 0, "not_applicable": 0, "evaluated": 0}
     route_pairs: list[tuple[str, str]] = []
     safety_pairs: list[tuple[str, str]] = []
     route_accepted: list[bool] = []
@@ -135,7 +95,7 @@ def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     capsule_cited_units: set[str] = set()
 
     for observation in _observations(records):
-        expected = observation["expected"]
+        expected = reviewed_expected(observation["expected"])
         actual = observation["actual"]
         judge = observation.get("judge", {})
         response = expected.get("response_oracle")
@@ -148,16 +108,16 @@ def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         } if _sequence(units) else set()
         capsule_injected += len(unit_refs)
         judged_claims = judge.get("faithfulness_claims", ()) if isinstance(judge, Mapping) else ()
-        required = response.get("required_claims", ())
-        if _sequence(required) and _sequence(judged_claims):
-            turn_score = score_claims(required, judged_claims)
-            claim_totals = ClaimScore(
-                claim_totals.tp + turn_score.tp,
-                claim_totals.fp + turn_score.fp,
-                claim_totals.fn + turn_score.fn,
-                claim_totals.supported_claims + turn_score.supported_claims,
-                claim_totals.total_claims + turn_score.total_claims,
-            )
+        assessment = observation.get("assessment")
+        inventory = observation.get("inventory")
+        if isinstance(assessment, Mapping) and isinstance(inventory, Mapping):
+            from xiaoan_eval_core.scoring import claim_metrics
+            metrics = claim_metrics(inventory, assessment).get("faithfulness", {})
+            for verdict, count in metrics.get("counts", {}).items():
+                key = str(verdict).lower()
+                if key in semantic_claims:
+                    semantic_claims[key] += int(count)
+                    semantic_claims["evaluated"] += int(count)
         if _sequence(judged_claims):
             judged_text = {
                 str(item.get("claim")) for item in judged_claims
@@ -250,31 +210,12 @@ def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if isinstance(observation.get("attribution"), Mapping)
     ]
     return {
-        "claims": {
-            "tp": claim_totals.tp,
-            "fp": claim_totals.fp,
-            "fn": claim_totals.fn,
-            "precision": claim_totals.precision,
-            "recall": claim_totals.recall,
-            "f1": claim_totals.f1,
-            "faithfulness": claim_totals.faithfulness,
-            "unsupported_claim_rate": (
-                (claim_totals.total_claims - claim_totals.supported_claims) / claim_totals.total_claims
-                if claim_totals.total_claims else None
-            ),
-        },
-        "legacy_literal_diagnostics": {
-            "status": "DEPRECATED_LITERAL_MATCH_NOT_TASK_CORRECTNESS",
-            "literal_f1": claim_totals.f1,
-            "literal_recall": claim_totals.recall,
-            "literal_forbidden_count": forbidden_seen,
-            "literal_forbidden_rate": forbidden_seen / judged_claim_count if judged_claim_count else None,
-        },
+        "claims": _semantic_claim_summary(semantic_claims),
         "answer": {
             "correctness_f1": None,
             "task_correctness_source": "semantic_oracle; literal matching is diagnostic only",
             "completeness_recall": None,
-            "faithfulness": claim_totals.faithfulness,
+            "faithfulness": _semantic_claim_summary(semantic_claims)["strict_rate"],
             "forbidden_claim_count": None,
             "forbidden_claim_rate": None,
             "length_compliance_rate": _mean(length_checks),
@@ -310,7 +251,6 @@ def summarize_v3(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "human_calibration": _human_calibration(records),
         "semantic_attribution": semantic_attribution_metrics(semantic_turns),
         "semantic_oracle": summarize_oracles([o.get("judge", {}).get("oracle_assessment") for o in _observations(records) if o.get("expected", {}).get("response_oracle")]),
-        "legacy_claim_matching": "DEPRECATED_LITERAL_MATCH_NOT_TASK_CORRECTNESS",
         "statistics": _case_statistics(records),
     }
 
@@ -517,7 +457,7 @@ def render_v3_markdown(summary: Mapping[str, Any]) -> str:
     lines += ["", "## Judge calibration", "", "| Metric | Value |", "| --- | ---: |"]
     for key, value in calibration.items():
         lines.append(f"| {key} | {value if value is not None else 'n/a'} |")
-    for section in ("semantic_oracle", "legacy_literal_diagnostics", "answer", "citations", "semantic_attribution", "route", "safety", "refusal", "tools", "agent", "statistics", "human_calibration"):
+    for section in ("semantic_oracle", "answer", "citations", "semantic_attribution", "route", "safety", "refusal", "tools", "agent", "statistics", "human_calibration"):
         values = summary.get(section, {})
         if not isinstance(values, Mapping):
             continue

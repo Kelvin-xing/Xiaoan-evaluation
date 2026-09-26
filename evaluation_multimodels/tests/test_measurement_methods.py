@@ -19,11 +19,14 @@ def oracle():
 
 def test_ranking_known_positions_and_short_list():
     r=retrieval(ranking())
-    assert r['precision_at_k']==pytest.approx(2/3)
-    assert r['recall_at_k']==1 and r['reciprocal_rank_at_k']==.5
+    assert r['reciprocal_rank_at_k']==.5
+    removed = {'precision_at_k', 'recall_at_k', 'short_list_policy'}
+    assert removed.isdisjoint(r)
+    batch = retrieval_batch([ranking()])
+    assert removed.isdisjoint(batch['strata'][0]['metrics'])
     assert r['ap_at_k']==pytest.approx((.5+2/3)/2)
     assert 0<r['ndcg_at_k']<1
-    inp=ranking();inp['ranked_ids']=['a'];assert retrieval(inp)['precision_at_k']==pytest.approx(1/3)
+    inp=ranking();inp['ranked_ids']=['a'];assert retrieval(inp)['ap_at_k']==pytest.approx(.5)
 
 
 @pytest.mark.parametrize('change,status',[({'ranked_ids':['x']},'UNAVAILABLE'),({'judgments_complete':False},'UNAVAILABLE'),({'ranked_ids':[]},'AVAILABLE')])
@@ -34,7 +37,7 @@ def test_retrieval_missing_is_not_irrelevant(change,status):
 def test_retrieval_duplicates_and_no_positive_gold():
     r=ranking();r['ranked_ids']=['a','a']
     with pytest.raises(ValueError):retrieval(r)
-    r.update(ranked_ids=['c'],qrels={'c':0});assert retrieval(r)['recall_at_k'] is None
+    r.update(ranked_ids=['c'],qrels={'c':0});assert retrieval(r)['ap_at_k'] is None
 
 
 def test_macro_cluster_weighting_and_pairing():

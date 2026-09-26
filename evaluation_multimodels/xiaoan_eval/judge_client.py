@@ -26,7 +26,9 @@ class JudgeClient:
         self._rating_rule = rating_rule
         self.judge_id = judge_id or os.getenv("XIAOAN_JUDGE_ID", "judge:configured")
         self.provider_id = provider_id or os.getenv("XIAOAN_JUDGE_PROVIDER", "configured")
-        self.model = model or os.getenv("XIAOAN_JUDGE_MODEL", "configured")
+        from xiaoan_eval_core import model_config
+        role = "XIAOAN_SECONDARY_JUDGE_MODEL" if getattr(provider, "__name__", "") == "second_judge" else "XIAOAN_JUDGE_MODEL"
+        self.model = model or model_config.model(role)
         self._checkpoint = checkpoint
         self._checkpoint_event = checkpoint_event
 

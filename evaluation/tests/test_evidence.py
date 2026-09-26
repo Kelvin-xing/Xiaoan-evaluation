@@ -139,3 +139,42 @@ def test_chatflow_runtime_v1_envelope_is_losslessly_adapted() -> None:
 
     assert catalog[0]["policy_ids"] == ["capsule-rule-1"]
     assert catalog[0]["content"] == json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _runtime_history_window(turn=5):
+    units=[]
+    for index in range(2):
+        for role,layer in [('user','PRIOR_USER'),('assistant','PRIOR_ASSISTANT')]:
+            content=f'{role}-{index}'
+            digest='sha256:'+hashlib.sha256(json.dumps(content,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            units.append({'ref':f'router:history/{index}/{role}','item_id':f'{index}:{role}', 'entity_id':f'history:{index}','field_path':role,'layer':layer,'content':content,'content_hash':digest,'inclusion_state':'EXPOSED'})
+    return {'schema_version':'effective-context-snapshot/v1','snapshot_id':'history-window','turn':turn,'context_kind':'ORDINARY_CAPSULE','invocations':{'router':{'status':'INVOKED','context_units':units},'composer':{'status':'INVOKED','context_units':[]}}}
+
+
+def test_runtime_history_window_keeps_prior_turns_and_router_only_scope():
+    snapshot=validate_effective_context_snapshot(_runtime_history_window())
+    assert [u.source_turn for u in snapshot.router.units]==[3,3,4,4]
+    assert build_evidence_catalog(snapshot)==[] # Never expose Router history to Composer judge.
+
+
+def test_runtime_history_window_rejects_unknown_or_overlong_history():
+    with pytest.raises(SnapshotValidationError):
+        validate_effective_context_snapshot(_runtime_history_window(turn=2))
+    raw=_runtime_history_window();raw['invocations']['router']['context_units'][0]['ref']='router:history/unbound/user'
+    with pytest.raises(SnapshotValidationError):
+        validate_effective_context_snapshot(raw)
+
+
+def test_runtime_composer_history_is_bound_to_its_own_invocation():
+    raw = _runtime_history_window()
+    units = raw["invocations"]["router"]["context_units"]
+    raw["invocations"]["composer"]["context_units"] = [
+        {**unit, "ref": unit["ref"].replace("router:", "composer:")}
+        for unit in units
+    ]
+    validated = validate_effective_context_snapshot(raw)
+    assert [u.source_turn for u in validated.composer.units] == [3, 3, 4, 4]
+    assert len(build_evidence_catalog(validated)) == 4
+    raw["invocations"]["composer"]["context_units"][0]["ref"] = units[0]["ref"]
+    with pytest.raises(SnapshotValidationError):
+        validate_effective_context_snapshot(raw)

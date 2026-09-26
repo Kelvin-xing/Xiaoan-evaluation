@@ -62,7 +62,7 @@ def test_empty_oracles_and_unsupported_required_claims_have_distinct_denominator
     }]}}])
     assert summary["route"]["accepted_accuracy"] is None
     assert summary["safety"]["accepted_accuracy"] is None
-    assert summary["claims"]["unsupported_claim_rate"] == 1
+    assert summary["claims"]["status"] == "UNAVAILABLE"
 
 
 @pytest.mark.parametrize("kind, state, status", [

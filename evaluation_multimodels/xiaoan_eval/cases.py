@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping, Sequence
 import yaml
 
 from .rules import RatingRule
+from .reference_oracle import parse_reference_oracle
 
 
 SUPPORTED_SCHEMA_VERSION = "2.0"
@@ -28,11 +29,20 @@ class ToolExpectation:
 
 
 @dataclass(frozen=True)
+class PartialAbstention:
+    reason: str
+    boundary: str
+    required_claim_ids: tuple[str, ...]
+    forbidden_claim_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ResponseOracle:
     required_claims: tuple[str, ...] = ()
     forbidden_claims: tuple[str, ...] = ()
     must_cite: tuple[str, ...] = ()
     should_abstain: bool | None = None
+    partial_abstention: PartialAbstention | None = None
     max_chars: int | None = None
     expected_tools: tuple[ToolExpectation, ...] = ()
     goal_completed: bool | None = None
@@ -55,6 +65,7 @@ class ExpectedOutcome:
     capsule_ids: tuple[str, ...] = ()
     response_oracle: ResponseOracle | None = None
     retrieval_oracle: Mapping[str, Any] | None = None
+    reference_oracle: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +90,8 @@ class OracleProvenance:
     reviewed_by: str | None = None
     reviewed_at: str | None = None
     legal_effective_date: str | None = None
+    legal_date_applicability: str = "required"
+    legal_date_not_applicable_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -245,7 +258,16 @@ def _parse_v2(
         reviewed_by=_optional_string(provenance_raw.get("reviewed_by")),
         reviewed_at=_optional_string(provenance_raw.get("reviewed_at")),
         legal_effective_date=_optional_string(provenance_raw.get("legal_effective_date")),
+        legal_date_applicability=provenance_raw.get("legal_date_applicability", "required"),
+        legal_date_not_applicable_reason=_optional_string(provenance_raw.get("legal_date_not_applicable_reason")),
     )
+    if provenance.legal_date_applicability not in ("required", "not_applicable"):
+        raise CaseValidationError("legal_date_applicability must be required or not_applicable")
+    if provenance.legal_date_applicability == "not_applicable":
+        if not (provenance.legal_date_not_applicable_reason or "").strip():
+            raise CaseValidationError("legal_date_not_applicable_reason is required for an exemption")
+        if provenance.legal_effective_date is not None:
+            raise CaseValidationError("legal_date_applicability not_applicable conflicts with legal_effective_date")
     if provenance.status not in {"provisional", "reviewed", "approved"}:
         raise CaseValidationError("oracle_provenance.status must be provisional, reviewed, or approved")
     if provenance.status in {"reviewed", "approved"} and (
@@ -364,8 +386,16 @@ def _parse_turn(raw: Mapping[str, Any]) -> TestTurn:
             ),
             response_oracle=_parse_response_oracle(expected_raw),
             retrieval_oracle=_parse_retrieval_oracle(expected_raw),
+            reference_oracle=_parse_reference_contract(expected_raw.get("reference_oracle")),
         )
     return TestTurn(number, user, expected)
+
+
+def _parse_reference_contract(value):
+    try:
+        return parse_reference_oracle(value)
+    except ValueError as exc:
+        raise CaseValidationError(str(exc)) from exc
 
 
 def _parse_checkpoint(raw: Mapping[str, Any]) -> MemoryCheckpoint:
@@ -407,7 +437,11 @@ def _preflight_issues(
                 "provisional oracle cannot be used as a formal hard gate",
             )
         )
-    if "法律维权" in case.quality_focus and case.oracle_provenance.legal_effective_date is None:
+    if (
+        "法律维权" in case.quality_focus
+        and case.oracle_provenance.legal_date_applicability == "required"
+        and case.oracle_provenance.legal_effective_date is None
+    ):
         issues.append(
             PreflightIssue(
                 "missing_legal_effective_date",
@@ -511,7 +545,7 @@ def _parse_response_oracle(raw: Mapping[str, Any]) -> ResponseOracle | None:
     if not isinstance(value, Mapping):
         raise CaseValidationError("response_oracle must be a string or mapping")
     allowed = {
-        "required_claims", "forbidden_claims", "must_cite", "should_abstain",
+        "required_claims", "forbidden_claims", "must_cite", "should_abstain", "partial_abstention",
         "max_chars", "expected_tools", "goal_completed", "max_steps",
         "reference_answer",
     }
@@ -540,12 +574,38 @@ def _parse_response_oracle(raw: Mapping[str, Any]) -> ResponseOracle | None:
             value.get("must_cite", []), "response_oracle.must_cite"
         ),
         should_abstain=should_abstain,
+        partial_abstention=_parse_partial_abstention(value),
         max_chars=max_chars,
         expected_tools=_parse_tool_expectations(value.get("expected_tools", [])),
         goal_completed=goal_completed,
         max_steps=max_steps,
         reference_answer=reference_answer.strip() if isinstance(reference_answer, str) else None,
     )
+
+
+def _parse_partial_abstention(oracle: Mapping[str, Any]) -> PartialAbstention | None:
+    value = oracle.get("partial_abstention")
+    if value is None:
+        return None
+    fields = {"reason", "boundary", "required_claim_ids", "forbidden_claim_ids"}
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise CaseValidationError("partial_abstention requires reason, boundary and claim IDs")
+    reasons = {"insufficient_evidence", "no_guarantee", "jurisdiction_unclear",
+               "decision_boundary", "unsafe_action"}
+    if not isinstance(value["reason"], str) or value["reason"] not in reasons:
+        raise CaseValidationError("partial_abstention.reason is invalid")
+    if not isinstance(value["boundary"], str) or not value["boundary"].strip():
+        raise CaseValidationError("partial_abstention.boundary must be non-empty text")
+    if oracle.get("should_abstain") is True:
+        raise CaseValidationError("partial_abstention cannot require whole-response abstention")
+    refs = {}
+    for key, field, prefix in [("required_claim_ids", "required_claims", "R"),
+                               ("forbidden_claim_ids", "forbidden_claims", "F")]:
+        refs[key] = _string_tuple(value[key], "partial_abstention." + key)
+        valid = {f"{prefix}{i}" for i in range(1, len(oracle.get(field, [])) + 1)}
+        if not refs[key] or len(refs[key]) != len(set(refs[key])) or not set(refs[key]) <= valid:
+            raise CaseValidationError("partial_abstention claim IDs must reference existing unique items")
+    return PartialAbstention(reason=value["reason"], boundary=value["boundary"].strip(), **refs)
 
 
 def _parse_tool_expectations(value: Any) -> tuple[ToolExpectation, ...]:
