@@ -1,0 +1,208 @@
+{
+  "request_digest": "9e4e168acfbb569a1bd99f63229c4e74a151e55d7e326ef6768ae6e6e2087023",
+  "decisions": [
+    {
+      "target": "Ground selector",
+      "key": "global_intent",
+      "status": "VERIFY",
+      "recommendation": "核對 TC-61、TC-57、TC-62 的運行時候選分支、選中序號、載入結果及節點可用性，以區分條件未命中與載入失敗；現行 prompt 不能證明歷史選擇過程。",
+      "current_quote": "",
+      "unit_ids": [
+        "785dba8cfdaf8caeb12d5eafa7927bb003720103bf4977cf3789c32fd6c5fd66:gpt-5.6-luna",
+        "86c0d2c419266fb3f289d98a29ee480163d15c3ff958f73323c8243dd18e1f7d:gpt-5.6-luna",
+        "9db37d6de87164c593e3ea334e2c267c4a82d8256919b92e2ea642985c7140fa:gpt-5.6-luna"
+      ]
+    },
+    {
+      "target": "Ground selector",
+      "key": "branch_match",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；案例未提供管轄地比對造成分支落選的證據。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule k3",
+      "key": "ground",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待驗證候選：在現有法律適用範圍分支旁增加條件「用戶詢問同性伴侶等家庭成員以外共同生活者是否受《反家庭暴力法》保護」時選 cohabiting-person-scope；不將未共同生活者一概納入。單鍵位回歸測試：TC-57 的同性同居提問應選該節點，單問施暴法律責任仍選原責任節點。另核對運行時分支選擇及載入紀錄。",
+      "current_quote": "- if: 用户提到\"警察/他人说法律管不了家里的事\"，询问家暴是否真的会被依法追究\n  node: liability-for-domestic-violence",
+      "unit_ids": [
+        "86c0d2c419266fb3f289d98a29ee480163d15c3ff958f73323c8243dd18e1f7d:claude-sonnet-5",
+        "86c0d2c419266fb3f289d98a29ee480163d15c3ff958f73323c8243dd18e1f7d:gpt-5.6-luna"
+      ]
+    },
+    {
+      "target": "Capsule n1",
+      "key": "ground",
+      "status": "VERIFY",
+      "recommendation": "核對 TC-57 實際是否載入 n1、共同生活者分支是否參與選擇，以及 k3 與 n1 的適用邊界；僅憑本案的 k3 路由不能歸因於 n1 條件。",
+      "current_quote": "",
+      "unit_ids": [
+        "86c0d2c419266fb3f289d98a29ee480163d15c3ff958f73323c8243dd18e1f7d:gpt-5.6-luna"
+      ]
+    },
+    {
+      "target": "Capsule n2a",
+      "key": "ground",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待驗證候選：在「用户询问收集的证据能否用于离婚诉讼」分支旁增加境外證據專項條件；當用戶問境外英文報警、醫療記錄在內地民事訴訟的提交、翻譯或證明手續時，選 foreign-civil-evidence，可與離婚救濟節點並列。單鍵位回歸測試：TC-62 應選境外證據節點；僅問家暴離婚賠償時仍選 family-law-relief。另核對節點載入及正式來源。",
+      "current_quote": "- if: 用户询问收集的证据能否用于离婚诉讼、证明家暴事实或主张损害赔偿\n  node: family-law-relief",
+      "unit_ids": [
+        "9db37d6de87164c593e3ea334e2c267c4a82d8256919b92e2ea642985c7140fa:claude-sonnet-5",
+        "9db37d6de87164c593e3ea334e2c267c4a82d8256919b92e2ea642985c7140fa:gpt-5.6-luna"
+      ]
+    },
+    {
+      "target": "Capsule n3",
+      "key": "ground",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-29 是教師詢問強制報告，需先核對為何路由至 n3，而非把教師義務加入求助總覽分支。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n5e",
+      "key": "ground",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待驗證候選：在現有離婚證據分支旁增加條件；當用戶詢問離婚財產轉移後，能否憑車牌或舊銀行帳號依法申請調查取證、保全時，選 civil-investigation-and-preservation，不把保護令取證當作該問題的唯一依據。單鍵位回歸測試：TC-61 應選民事調查與保全節點；僅問家暴事實證據時仍選原保護令證據節點。另核對運行時載入紀錄。",
+      "current_quote": "- if: 用户询问离婚诉讼中需要哪些证据\n  node: protection-order-evidence",
+      "unit_ids": [
+        "785dba8cfdaf8caeb12d5eafa7927bb003720103bf4977cf3789c32fd6c5fd66:claude-sonnet-5",
+        "785dba8cfdaf8caeb12d5eafa7927bb003720103bf4977cf3789c32fd6c5fd66:gpt-5.6-luna"
+      ]
+    },
+    {
+      "target": "Wiki civil-investigation-and-preservation",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "先核對節點在 TC-61 運行時是否可用及為何未送達，並向正式來源核對所列條文的現行版本與適用範圍；答案中的銀行調查令說法另需查證，不能據此直接修改 Wiki 引用。",
+      "current_quote": "",
+      "unit_ids": [
+        "785dba8cfdaf8caeb12d5eafa7927bb003720103bf4977cf3789c32fd6c5fd66:claude-sonnet-5",
+        "785dba8cfdaf8caeb12d5eafa7927bb003720103bf4977cf3789c32fd6c5fd66:gpt-5.6-luna"
+      ]
+    },
+    {
+      "target": "Wiki cohabiting-person-scope",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "核對 TC-57 的節點選擇與載入紀錄，以及所列共同生活者來源的正式文本和適用範圍；節點未送達不足以認定 Wiki 正文或引用有錯。",
+      "current_quote": "",
+      "unit_ids": [
+        "86c0d2c419266fb3f289d98a29ee480163d15c3ff958f73323c8243dd18e1f7d:claude-sonnet-5",
+        "86c0d2c419266fb3f289d98a29ee480163d15c3ff958f73323c8243dd18e1f7d:gpt-5.6-luna"
+      ]
+    },
+    {
+      "target": "Wiki foreign-civil-evidence",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "核對 TC-62 為何未選取或載入此節點，並以正式來源核對境外文書類型、翻譯及證明手續的適用條件；不得因答案泛稱公證認證就推斷現行 Wiki 引用錯誤。",
+      "current_quote": "",
+      "unit_ids": [
+        "9db37d6de87164c593e3ea334e2c267c4a82d8256919b92e2ea642985c7140fa:claude-sonnet-5",
+        "9db37d6de87164c593e3ea334e2c267c4a82d8256919b92e2ea642985c7140fa:gpt-5.6-luna"
+      ]
+    },
+    {
+      "target": "Wiki mandatory-reporting",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "核對 TC-29 的 n3 路由後是否曾選擇或載入 Ground，以及 mandatory-reporting 節點的可用性；再以正式來源核對教師對疑似受暴未成年人的報告義務。無節點送達證據時不直接改 Wiki 引用。",
+      "current_quote": "",
+      "unit_ids": [
+        "30fb1b5cdfd0297f05f7f4d0c43ebeb614608f6a2600ed9d1740842377aaa1bb:claude-sonnet-5",
+        "30fb1b5cdfd0297f05f7f4d0c43ebeb614608f6a2600ed9d1740842377aaa1bb:gpt-5.6-luna"
+      ]
+    },
+    {
+      "target": "Wiki marital-property-and-debt",
+      "key": "source_refs",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；提供的案例沒有指出此鍵位的引用或內容問題。",
+      "current_quote": "",
+      "unit_ids": []
+    }
+  ],
+  "usage": {
+    "input_tokens": 17535,
+    "output_tokens": 2455,
+    "total_tokens": 19990,
+    "cached_input_tokens": 0,
+    "cache_write_tokens": null,
+    "input_token_semantics": "total_including_cache",
+    "raw_usage": {
+      "attribution": {
+        "items": {
+          "msg_032b46d671f4b74c016ab9541a378087d081bf0c402e85bd06": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "content": [
+              {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "input_tokens": 409,
+                "output_tokens": 0
+              }
+            ],
+            "input_tokens": 409,
+            "output_tokens": 0
+          },
+          "msg_032b46d671f4b74c016ab9541a37a087d08d62c587a704dcf1": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "content": [
+              {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "input_tokens": 12339,
+                "output_tokens": 0
+              }
+            ],
+            "input_tokens": 12339,
+            "output_tokens": 0
+          },
+          "rs_032b46d671f4b74c016ab9541aee5087d0982289e99ea51131": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "input_tokens": 2,
+            "output_tokens": 283
+          },
+          "msg_032b46d671f4b74c016ab95422314487d0aaada3b42a20171b": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "content": [
+              {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 2172
+              }
+            ],
+            "input_tokens": 0,
+            "output_tokens": 2172
+          }
+        },
+        "request_fields": {
+          "instructions": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "input_tokens": 4785,
+            "output_tokens": 0
+          }
+        }
+      },
+      "input_tokens": 17535,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
+      },
+      "output_tokens": 2455,
+      "output_tokens_details": {
+        "reasoning_tokens": 283
+      },
+      "total_tokens": 19990
+    }
+  }
+}

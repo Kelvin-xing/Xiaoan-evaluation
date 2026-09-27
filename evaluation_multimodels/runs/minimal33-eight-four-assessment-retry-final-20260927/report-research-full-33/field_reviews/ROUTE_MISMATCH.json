@@ -1,0 +1,310 @@
+{
+  "request_digest": "a8c2c475fad97a18c5cc922dc3e3f02a018c3d3afe4a2897caa96a0901be6665",
+  "decisions": [
+    {
+      "target": "Router",
+      "key": "candidate_selection",
+      "status": "VERIFY",
+      "recommendation": "核對各案例運行時的 eligible_capsules、候選卡片、模型輸出、信心分數及最終採用路由；單靠路由比對失敗，無法判定是候選召回、精篩還是路由選擇造成。",
+      "current_quote": "",
+      "unit_ids": [
+        "81e5efba8739941b12f3011ebc451ea4a963043ba67082c170064f6ff50c2602:claude-sonnet-5",
+        "364f7a3a44870505508868997224cac29238ccd63e55b45c86523d0a5ddd1fdb:claude-sonnet-5",
+        "d37a2197624d2718ab62f7fe8a6a02e103251c5031e913ab07ff605bfe9efcad:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule k3",
+      "key": "triggers",
+      "status": "VERIFY",
+      "recommendation": "核對 TC-53 運行時的候選召回及觸發理由，確認「法律詞彙聽不懂」是否被歸入泛泛的法律權益困惑；路由比對失敗尚不足以確定此素材需要修改。",
+      "current_quote": "",
+      "unit_ids": [
+        "364f7a3a44870505508868997224cac29238ccd63e55b45c86523d0a5ddd1fdb:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule k3",
+      "key": "use_when",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對運行時選擇後，將「用户有了解自身权利的意愿」限縮為詢問自身權利或權益；若只是要求用白話解釋已點名的保護令術語，不以此條件選 k3。單鍵位回歸測試：TC-53 不因「法律词汇听不懂」符合本條，詢問離婚財產權益的既有例句仍符合。",
+      "current_quote": "- 用户有了解自身权利的意愿",
+      "unit_ids": [
+        "364f7a3a44870505508868997224cac29238ccd63e55b45c86523d0a5ddd1fdb:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule k3",
+      "key": "do_not_use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；沒有案例顯示此排除條件造成路由差異。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule k4",
+      "key": "triggers",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-30 僅提及復合搬回，未表達此鍵位例句中的無力或放棄求助。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule k4",
+      "key": "use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-30 未表達因返回而深度自責或羞恥，不能由偏好 k2 推定 k4 條件有缺陷。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule k4",
+      "key": "do_not_use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；沒有原始理由指向此排除條件。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n1",
+      "key": "triggers",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對運行時召回後，在識別控制的例句中補入「反覆說我記錯、太敏感」及「家人扣留手機和退休金」；僅供使用者描述自身受控制、需要辨識或理解處境時召回，不把第三方單憑淤青的猜測當成已確認受暴。單鍵位回歸測試：TC-18、TC-11 可被此鍵位召回，TC-28 不因新增例句被當作當事人控制案例。",
+      "current_quote": "- \"不让我跟朋友来往，删掉我所有联系人，这属于什么？\"",
+      "unit_ids": [
+        "81e5efba8739941b12f3011ebc451ea4a963043ba67082c170064f6ff50c2602:claude-sonnet-5",
+        "6486aa4a56104f4faa316501a99c69ca57b697d3def19686750b8c6800c5ddd0:claude-sonnet-5",
+        "3cf51e70bd9128af3add2abf8270a663577b8f9c4a376923ea212f410ea98c0e:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule n1",
+      "key": "use_when",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對運行時精篩後，將「对自己的遭遇是否属于家庭暴力感到困惑」擴為：使用者描述自身遭反覆否定記憶，或通訊、收入被家人控制，並希望理解處境時，即使沒有直接問「算不算家暴」也可適用；不據此診斷他人或斷定未查明的事件。單鍵位回歸測試：TC-18、TC-11 符合擴充條件，單純詢問無關事項仍不符合。",
+      "current_quote": "- 对自己的遭遇是否属于家庭暴力感到困惑，尤其是在无肢体冲突、但却遭受冷暴力、辱骂、威胁、限制社交的情况下。",
+      "unit_ids": [
+        "81e5efba8739941b12f3011ebc451ea4a963043ba67082c170064f6ff50c2602:claude-sonnet-5",
+        "6486aa4a56104f4faa316501a99c69ca57b697d3def19686750b8c6800c5ddd0:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule n1",
+      "key": "do_not_use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；案例未顯示「與識別暴力無關」這項排除條件有誤。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n2",
+      "key": "triggers",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對運行時召回後，在離開後安全安排的例句中加入「已暫住別處，必需藥物留在原住處且即將用完」；只在取回物品可能涉及返回風險時觸發，不能暗示獨自返家。單鍵位回歸測試：連同前文輸入 TC-74 第二輪可召回 n2，普通物品遺留但無安全安排需求不因本例句召回。",
+      "current_quote": "- \"我该怎么准备逃跑/离开\"",
+      "unit_ids": [
+        "6bd63128c283b1d41afae4b69b0cde194d8b42358a3f2716e0962df3f8ed42e6:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule n2",
+      "key": "use_when",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對運行時精篩後，將「用户想了解如何制定安全计划(无论是否决定离开)」補充為包含已離開後、為取得留在原處的必需藥物而需要安全安排；藥即將用完時先考慮聯絡醫療或藥事渠道，不以返家為前提。單鍵位回歸測試：TC-74 連同前文符合此條件；僅詢問一般藥物補領、無原住處風險脈絡者不符合。",
+      "current_quote": "- 用户想了解如何制定安全计划(无论是否决定离开)",
+      "unit_ids": [
+        "6bd63128c283b1d41afae4b69b0cde194d8b42358a3f2716e0962df3f8ed42e6:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule n2",
+      "key": "do_not_use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-74 沒有正在遭受暴力或明確拒談安全的資訊。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n2a",
+      "key": "triggers",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；提供的案例沒有取證需求與此鍵位的比對理由。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n2a",
+      "key": "use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；沒有案例指向取證適用條件。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n2a",
+      "key": "do_not_use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；沒有案例指向取證排除條件。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n5d",
+      "key": "triggers",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-30 是報告已搬回，沒有提出離婚或去留決策。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n5d",
+      "key": "use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；不能由復合搬回推定正在尋求離婚決策支持。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n5d",
+      "key": "do_not_use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；沒有原始理由指向此排除條件。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n5p",
+      "key": "triggers",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對運行時召回後，在「保护令是什么，怎么申请」旁補入「保護令這些法律詞聽不懂，請用白話簡短解釋」；限於使用者點名保護令並要求解釋，非泛指所有法律困惑。單鍵位回歸測試：TC-53 可召回 n5p，未提保護令的一般財產權益問題不因新增例句召回。",
+      "current_quote": "- \"保护令是什么，怎么申请\"",
+      "unit_ids": [
+        "364f7a3a44870505508868997224cac29238ccd63e55b45c86523d0a5ddd1fdb:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule n5p",
+      "key": "use_when",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對運行時精篩後，將「用户想了解保护令的申请条件、流程、证据要求」補充為也涵蓋要求用日常語言解釋保護令概念；此情況一次說一個重點並允許追問，不預設使用者要申請。單鍵位回歸測試：TC-53 符合新增條件，單純表示不懂法律而未指明保護令者不符合。",
+      "current_quote": "- 用户想了解保护令的申请条件、流程、证据要求",
+      "unit_ids": [
+        "364f7a3a44870505508868997224cac29238ccd63e55b45c86523d0a5ddd1fdb:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule n5p",
+      "key": "do_not_use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-53 未顯示此排除條件適用。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule nc",
+      "key": "triggers",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-28 是第三方依淤青提出懷疑，不能據此增加已確認暴力的觸發例句。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule nc",
+      "key": "use_when",
+      "status": "VERIFY",
+      "recommendation": "核對 TC-28 運行時的候選卡片與精篩理由，確認是否把第三方對朋友淤青的懷疑讀成使用者本人曾遭暴力；也需覆核 baseline 的路由預期，不能只憑 oracle 差異認定此條件有缺陷。",
+      "current_quote": "",
+      "unit_ids": [
+        "3cf51e70bd9128af3add2abf8270a663577b8f9c4a376923ea212f410ea98c0e:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule nc",
+      "key": "do_not_use_when",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-28 的分歧未指向此鍵位列出的即時暴力或冷暴力排除條件。",
+      "current_quote": "",
+      "unit_ids": []
+    }
+  ],
+  "usage": {
+    "input_tokens": 17413,
+    "output_tokens": 3402,
+    "total_tokens": 20815,
+    "cached_input_tokens": 0,
+    "cache_write_tokens": null,
+    "input_token_semantics": "total_including_cache",
+    "raw_usage": {
+      "attribution": {
+        "items": {
+          "msg_05af4ee100f2ae62016ab9541497e087d09677f943e28c0e21": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "content": [
+              {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "input_tokens": 409,
+                "output_tokens": 0
+              }
+            ],
+            "input_tokens": 409,
+            "output_tokens": 0
+          },
+          "msg_05af4ee100f2ae62016ab95414980087d0bfe4b272801d6f1f": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "content": [
+              {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "input_tokens": 12217,
+                "output_tokens": 0
+              }
+            ],
+            "input_tokens": 12217,
+            "output_tokens": 0
+          },
+          "rs_05af4ee100f2ae62016ab9541545f087d0ba580a3cefaf04c1": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "input_tokens": 2,
+            "output_tokens": 437
+          },
+          "msg_05af4ee100f2ae62016ab9542097a487d09f725c8aba4baa94": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "content": [
+              {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 2965
+              }
+            ],
+            "input_tokens": 0,
+            "output_tokens": 2965
+          }
+        },
+        "request_fields": {
+          "instructions": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "input_tokens": 4785,
+            "output_tokens": 0
+          }
+        }
+      },
+      "input_tokens": 17413,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
+      },
+      "output_tokens": 3402,
+      "output_tokens_details": {
+        "reasoning_tokens": 437
+      },
+      "total_tokens": 20815
+    }
+  }
+}

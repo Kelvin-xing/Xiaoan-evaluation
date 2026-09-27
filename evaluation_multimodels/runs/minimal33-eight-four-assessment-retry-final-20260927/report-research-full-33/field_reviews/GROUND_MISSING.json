@@ -1,0 +1,273 @@
+{
+  "request_digest": "5163206c7a6f406ca3d7c187dd2c3dc264c99477542f5bef0f2922f8cd97773c",
+  "decisions": [
+    {
+      "target": "Ground selector",
+      "key": "global_intent",
+      "status": "VERIFY",
+      "recommendation": "核對 TC-29 為何走 baseline，以及 TC-42、TC-57、TC-61、TC-62 的實際分支選擇輸出；再核對所選 Capsule 的條件匹配、節點載入與送達紀錄。現行選擇器內容不能證明歷史運行時的選擇結果。",
+      "current_quote": "",
+      "unit_ids": [
+        "743fe79b4c5e6690f4c106d205cbb6644b07f746de51fe642437cf809491d118:claude-sonnet-5",
+        "bc3f78750a02f9bc6e48a945f12751e838bfff4df9f202a0c97cddf556a8bfcb:claude-sonnet-5",
+        "c51ebeac4afcbb9556b682c83c9490a73f930a850238b7322584ab9d21c0bf21:claude-sonnet-5",
+        "cca202d7e86dd3907a32d7a8b7d807c3a6892c584f11e622384f92e51bc8bd87:claude-sonnet-5",
+        "3f357d6c8a6034373bb791157dbf6740e8b593dd053890be78caf03c4ec31f36:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Ground selector",
+      "key": "branch_match",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；所列案例沒有以司法管轄地匹配被排除為原始理由的證據。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule k3",
+      "key": "ground",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對選擇及載入紀錄後，新增條件「用户询问同性伴侣等家庭成员以外共同生活人员遭受暴力，是否受反家暴法保护」對應 cohabiting-person-scope、legal_basis；僅在問題涉及共同生活者的法律適用範圍時觸發，不對所有同性關係預設同居。單鍵位回歸測試：TC-57 選中 k3 時應選取該節點；單純詢問求助電話不應因此選取。",
+      "current_quote": "- if: 用户询问是否需要先离婚才能申请人身安全保护令\n  node: protection-order-real-danger-element",
+      "unit_ids": [
+        "c51ebeac4afcbb9556b682c83c9490a73f930a850238b7322584ab9d21c0bf21:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule n2a",
+      "key": "ground",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；本批有原始理由的案例未顯示 n2a 條件造成預期節點缺失。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n3",
+      "key": "ground",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；現有保護令條件已涵蓋是否須先離婚，TC-42 需先核對分支選擇及節點載入。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Capsule n3c",
+      "key": "ground",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對 TC-29 的 baseline 路由及載入紀錄後，新增條件「教师等学校工作人员询问工作中发现未成年人遭受或疑似遭受家暴时是否及如何报告」對應 mandatory-reporting、legal_basis；僅適用職業報告義務提問，不要求教師先自行證實。單鍵位回歸測試：以 TC-29 問句直接測 n3c 條件，應選取 mandatory-reporting；一般庇護所入住提問不應選取。",
+      "current_quote": "- if: 用户询问可以向哪些机构求助及其法定职责\n  node: help-and-reporting-paths",
+      "unit_ids": [
+        "743fe79b4c5e6690f4c106d205cbb6644b07f746de51fe642437cf809491d118:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule n5e",
+      "key": "ground",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對選擇與載入紀錄後，在「用户询问离婚诉讼中需要哪些证据」之外新增兩個較具體條件：詢問憑車牌或舊卡號在離婚訴訟中申請調查財產時，選 civil-investigation-and-preservation；詢問境外英文報警或就醫記錄在國內民事訴訟中的翻譯、證明形式時，選 foreign-civil-evidence。兩者各用 legal_basis，境外文書流程可另用 institutional_implementation；不得把保護令證據節點當成境外文書形式依據。單鍵位回歸測試：TC-61、TC-62 分別選中對應節點；普通國內家暴取證問題仍依原條件處理。",
+      "current_quote": "- if: 用户询问离婚诉讼中需要哪些证据\n  node: protection-order-evidence\n  source_roles:\n    - legal_basis",
+      "unit_ids": [
+        "cca202d7e86dd3907a32d7a8b7d807c3a6892c584f11e622384f92e51bc8bd87:claude-sonnet-5",
+        "3f357d6c8a6034373bb791157dbf6740e8b593dd053890be78caf03c4ec31f36:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Capsule n5p",
+      "key": "ground",
+      "status": "MODIFY_CANDIDATE",
+      "recommendation": "待核對 TC-66 的節點選擇及送達紀錄後，將「用户询问违反保护令会有什么后果」條件對應的節點組擴為 liability-for-domestic-violence 與 protection-order，均取 legal_basis；只在詢問違令後果及執行時增取保護令節點，並保留法院措施與警方刑事措施的區別。單鍵位回歸測試：TC-66 應選取兩節點；單問保護令有效期仍只按原有效期條件選取。",
+      "current_quote": "- if: 用户询问违反保护令会有什么后果\n  node: liability-for-domestic-violence\n  source_roles:\n    - legal_basis",
+      "unit_ids": [
+        "2f09daa855ca232b756d2b5dd8576c8763e688d0100b5add3894ad58716f01b3:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Wiki civil-investigation-and-preservation",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "先核對 TC-61 是否選取、載入並送達此節點；另以正式來源核對現列調查取證與保全條款的版本、錨點及適用範圍。未送達不能直接歸因於 Wiki 正文。",
+      "current_quote": "",
+      "unit_ids": [
+        "cca202d7e86dd3907a32d7a8b7d807c3a6892c584f11e622384f92e51bc8bd87:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Wiki cohabiting-person-scope",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "先核對 TC-57 的節點選擇、載入及送達；再向正式來源核對共同生活者條款、司法解釋與現列案例錨點是否適用於所述問題，不預斷現有引用錯誤。",
+      "current_quote": "",
+      "unit_ids": [
+        "c51ebeac4afcbb9556b682c83c9490a73f930a850238b7322584ab9d21c0bf21:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Wiki family-law-relief",
+      "key": "source_refs",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；本批原始理由未指出此鍵位的來源內容缺陷。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Wiki foreign-civil-evidence",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "先核對 TC-62 是否選取、載入並送達此節點；再以正式來源核對現列境外民事證據規定、公文書附加證明書通知的版本與適用條件，區分形式證明與內容採信。",
+      "current_quote": "",
+      "unit_ids": [
+        "3f357d6c8a6034373bb791157dbf6740e8b593dd053890be78caf03c4ec31f36:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Wiki liability-for-domestic-violence",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "TC-66 已列出此節點及相關來源；核對實際送達的條文內容、正式版本及回答使用情況，並核對 protection-order 是否另行送達。不能由預期節點檢查 UNAVAILABLE 推定此 Wiki 正文有誤。",
+      "current_quote": "",
+      "unit_ids": [
+        "2f09daa855ca232b756d2b5dd8576c8763e688d0100b5add3894ad58716f01b3:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Wiki mandatory-reporting",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "先核對 TC-29 的分支選擇與此節點的載入、送達；再以正式來源核對教師及未成年人疑似受暴報告義務的現列條文與適用範圍。",
+      "current_quote": "",
+      "unit_ids": [
+        "743fe79b4c5e6690f4c106d205cbb6644b07f746de51fe642437cf809491d118:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Wiki marital-property-and-debt",
+      "key": "source_refs",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-61 的原始理由針對調查程序節點缺失，未指出此鍵位的來源內容缺陷。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Wiki police-response-and-investigation",
+      "key": "source_refs",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；本批原始理由未指向此鍵位。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Wiki protection-order",
+      "key": "source_refs",
+      "status": "VERIFY",
+      "recommendation": "核對 TC-42、TC-66 的節點選擇、載入與送達紀錄，以及所送達內容的正式來源版本；節點檢查 UNAVAILABLE 不足以推定現列引用有誤。",
+      "current_quote": "",
+      "unit_ids": [
+        "bc3f78750a02f9bc6e48a945f12751e838bfff4df9f202a0c97cddf556a8bfcb:claude-sonnet-5",
+        "2f09daa855ca232b756d2b5dd8576c8763e688d0100b5add3894ad58716f01b3:claude-sonnet-5"
+      ]
+    },
+    {
+      "target": "Wiki protection-order-real-danger-element",
+      "key": "source_refs",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；TC-42 的原始理由是 protection-order 節點送達不可確認，未指出此要件節點的來源缺陷。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Wiki sexual-violence-in-family-context",
+      "key": "source_refs",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；本批原始理由未指向此鍵位。",
+      "current_quote": "",
+      "unit_ids": []
+    },
+    {
+      "target": "Wiki warning-letter",
+      "key": "source_refs",
+      "status": "NO_EVIDENCE",
+      "recommendation": "不建議修改；本批原始理由未指向此鍵位。",
+      "current_quote": "",
+      "unit_ids": []
+    }
+  ],
+  "usage": {
+    "input_tokens": 24397,
+    "output_tokens": 2961,
+    "total_tokens": 27358,
+    "cached_input_tokens": 0,
+    "cache_write_tokens": null,
+    "input_token_semantics": "total_including_cache",
+    "raw_usage": {
+      "attribution": {
+        "items": {
+          "msg_037a9bf3c703f77c016ab954179d1487d1bdfa7d6a51fb9753": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "content": [
+              {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "input_tokens": 409,
+                "output_tokens": 0
+              }
+            ],
+            "input_tokens": 409,
+            "output_tokens": 0
+          },
+          "msg_037a9bf3c703f77c016ab954179d2c87d190cc310ef1e54750": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "content": [
+              {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "input_tokens": 19201,
+                "output_tokens": 0
+              }
+            ],
+            "input_tokens": 19201,
+            "output_tokens": 0
+          },
+          "rs_037a9bf3c703f77c016ab95418801c87d1b4e6c290d67524d7": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "input_tokens": 2,
+            "output_tokens": 215
+          },
+          "msg_037a9bf3c703f77c016ab9541ea62487d18a0c1507c283e4a5": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "content": [
+              {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 2746
+              }
+            ],
+            "input_tokens": 0,
+            "output_tokens": 2746
+          }
+        },
+        "request_fields": {
+          "instructions": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "input_tokens": 4785,
+            "output_tokens": 0
+          }
+        }
+      },
+      "input_tokens": 24397,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
+      },
+      "output_tokens": 2961,
+      "output_tokens_details": {
+        "reasoning_tokens": 215
+      },
+      "total_tokens": 27358
+    }
+  }
+}
