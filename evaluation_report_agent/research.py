@@ -18,6 +18,30 @@ from .evidence import digest, dumps, file_hash
 
 
 VERSION = "full-judge-research/v1"
+CLAIM_TYPES = (
+    ('user_fact', '已支持：依使用者陳述復述事實', 'ENTAILED + FACTUAL + CURRENT_INPUT／PRIOR_USER 證據'),
+    ('safety_action', '已支持：依安全指引給出行動', 'ENTAILED + ACTION／RECOMMENDATION + safety_message 證據'),
+    ('capsule_supported', '已支持：有 Capsule 依據', 'ENTAILED + CAPSULE 證據'),
+    ('source_supported', '已支持：有來源文件依據', 'ENTAILED + SOURCE 證據'),
+    ('unsupported_fact', '未支持：事實斷言（含新增機制、假設事實化）', 'UNSUPPORTED + FACTUAL'),
+    ('unsupported_interpretation', '未支持：情境解讀', 'UNSUPPORTED + INTERPRETIVE'),
+    ('unsupported_legal_action', '未支持：法律／證據場景的行動建議', 'UNSUPPORTED + ACTION／RECOMMENDATION + legal_and_evidence 場景'),
+    ('contradicted', '相矛盾（含可能性必然化、時間錯讀）', 'CONTRADICTED；細分語義未全量標註'),
+    ('partial', '部分支持（含省略條件）', 'PARTIAL；細分語義未全量標註'),
+)
+CLAIM_EXAMPLES = (
+    ('user_fact', 'TC-18', 1, 'claude-sonnet-5', 'claude-sonnet-5', 'c3'),
+    ('safety_action', 'TC-01', 1, 'claude-sonnet-5', 'claude-sonnet-5', 'c3'),
+    ('capsule_supported', 'TC-53', 1, 'claude-sonnet-5', 'claude-sonnet-5', 'c9'),
+    ('source_supported', 'TC-66', 1, 'claude-sonnet-5', 'claude-sonnet-5', 'claim-1'),
+    ('unsupported_fact', 'TC-01', 2, 'claude-sonnet-5', 'claude-sonnet-5', 'c6'),
+    ('unsupported_fact', 'TC-29', 2, 'claude-sonnet-5', 'claude-sonnet-5', 'c3'),
+    ('unsupported_interpretation', 'TC-18', 1, 'claude-sonnet-5', 'claude-sonnet-5', 'c4'),
+    ('unsupported_legal_action', 'TC-61', 2, 'claude-sonnet-5', 'claude-sonnet-5', 'c4'),
+    ('contradicted', 'TC-53', 2, 'claude-sonnet-4-6', 'gpt-5.6-luna', 'c5'),
+    ('contradicted', 'TC-23', 1, 'deepseek-flash', 'gpt-5.6-luna', 'c1'),
+    ('partial', 'TC-66', 2, 'claude-sonnet-5', 'gpt-5.6-luna', 'c7'),
+)
 CODES = {
     "SAFETY_OVER": "安全分類過度接管",
     "SAFETY_MISS": "即時風險漏判",
@@ -81,6 +105,130 @@ def envelope_rows(path):
     error = process.stderr.read() if process.stderr else ""
     if process.wait():
         raise RuntimeError(f"jq extraction failed: {error}")
+
+
+def _jq_rows(path, expression):
+    process = subprocess.Popen(['jq', '-c', expression, str(path)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    assert process.stdout is not None
+    for line in process.stdout:
+        yield json.loads(line)
+    error = process.stderr.read() if process.stderr else ''
+    if process.wait():
+        raise RuntimeError(f'Claim extraction failed: {error}')
+
+
+def claim_types(claim):
+    verdict, kind = claim.get('verdict'), claim.get('kind')
+    refs = claim.get('evidence') or []
+    layers = {claim.get('context_layers', {}).get(ref.get('ref')) for ref in refs}
+    types = set()
+    if verdict == 'ENTAILED':
+        if kind == 'FACTUAL' and layers & {'CURRENT_INPUT', 'PRIOR_USER'}:
+            types.add('user_fact')
+        if kind in {'ACTION', 'RECOMMENDATION'} and any(
+                'safety_message' in str(ref.get('ref', '')) for ref in refs):
+            types.add('safety_action')
+        if 'CAPSULE' in layers:
+            types.add('capsule_supported')
+        if 'SOURCE' in layers:
+            types.add('source_supported')
+    elif verdict == 'UNSUPPORTED':
+        if kind == 'FACTUAL':
+            types.add('unsupported_fact')
+        if kind == 'INTERPRETIVE':
+            types.add('unsupported_interpretation')
+        if kind in {'ACTION', 'RECOMMENDATION'} and claim.get('scenario_category') == 'legal_and_evidence':
+            types.add('unsupported_legal_action')
+    elif verdict == 'CONTRADICTED':
+        types.add('contradicted')
+    elif verdict == 'PARTIAL':
+        types.add('partial')
+    return types
+
+
+def summarize_claims(claims):
+    from collections import Counter
+    counts, verdicts, examples, fallback = Counter(), Counter(), {}, {}
+    by_claim = defaultdict(dict)
+    anchors = {(case, turn, subject, judge, claim_id): category
+               for category, case, turn, subject, judge, claim_id in CLAIM_EXAMPLES}
+    for claim in claims:
+        verdicts[claim.get('verdict') or 'MISSING'] += 1
+        categories = claim_types(claim)
+        counts.update(categories)
+        key = tuple(claim.get(field) for field in ('case_id', 'turn', 'subject_id', 'judge_id', 'claim_id'))
+        if claim.get('verdict'):
+            identity = (claim.get('case_id'), claim.get('turn'), claim.get('subject_id'), claim.get('claim_id'))
+            by_claim[identity][claim.get('judge_id')] = claim.get('verdict')
+        category = anchors.get(key)
+        for name in categories:
+            fallback.setdefault(name, {field: claim.get(field) for field in
+                                ('case_id', 'turn', 'subject_id', 'judge_id', 'claim_id',
+                                 'answer_quote', 'verdict', 'reason', 'json_pointer')})
+        if category in categories:
+            examples[key] = {field: claim.get(field) for field in
+                             ('case_id', 'turn', 'subject_id', 'judge_id', 'claim_id',
+                              'answer_quote', 'verdict', 'reason', 'json_pointer')}
+    selected = [dict(examples[key], type_id=category)
+                for category, case, turn, subject, judge, claim_id in CLAIM_EXAMPLES
+                if (key := (case, turn, subject, judge, claim_id)) in examples]
+    seen = {example['type_id'] for example in selected}
+    selected.extend(dict(fallback[key], type_id=key) for key, _, _ in CLAIM_TYPES
+                    if key not in seen and key in fallback)
+    preferred = ('TC-01', 1, 'claude-sonnet-5', 'c2')
+    disagreements = [key for key, judges in by_claim.items() if len(set(judges.values())) > 1]
+    disagreement_key = preferred if preferred in disagreements else (min(disagreements) if disagreements else None)
+    return {'unit': 'judge_claim', 'total': sum(verdicts.values()),
+            'verdicts': dict(sorted(verdicts.items())),
+            'types': [{'id': key, 'label': label, 'rule': rule, 'count': counts[key]}
+                      for key, label, rule in CLAIM_TYPES],
+            'examples': selected,
+            'disagreement': ({'case_id':disagreement_key[0],'turn':disagreement_key[1],
+                              'subject_id':disagreement_key[2],'claim_id':disagreement_key[3],
+                              'judges':by_claim[disagreement_key]}
+                             if disagreement_key else None)}
+
+
+def claim_statistics(results):
+    inventories = {item['inventory_id']: {c['id']: c for c in item['claims']}
+                   for item in _jq_rows(results,
+                       '.inventories[] | {inventory_id, claims:[.claims[] | {id,kind,answer_quote:.answer_span.text}]}')}
+    answers = {item['answer_id']: item for item in _jq_rows(results,
+               '.answers[] | {answer_id,case_id,turn,subject_id,scenario_category,context_layers:(.context | map({key:.ref,value:.layer}) | from_entries)}')}
+    by_case = defaultdict(set)
+    for answer in answers.values():
+        if answer['scenario_category']:
+            by_case[answer['case_id']].add(answer['scenario_category'])
+    if any(len(values) > 1 for values in by_case.values()):
+        raise ValueError('Conflicting scenario categories within a case')
+    for answer in answers.values():
+        if not answer['scenario_category'] and by_case[answer['case_id']]:
+            answer['scenario_category'] = next(iter(by_case[answer['case_id']]))
+
+    def records():
+        expression = ('.envelopes[] | {answer_id,inventory_id,assessments:['
+                      '.assessments[] | {judge_id,claims:[.assessment.claims[]? | '
+                      '{id,verdict:.faithfulness.verdict,reason:.faithfulness.reason,evidence:.faithfulness.evidence}]}]}')
+        for envelope_index, envelope in enumerate(_jq_rows(results, expression)):
+            answer = answers[envelope['answer_id']]
+            inventory = inventories.get(envelope['inventory_id'])
+            for assessment_index, assessment in enumerate(envelope['assessments']):
+                judged = {item['id']: (index, item) for index, item in enumerate(assessment['claims'])}
+                if inventory is None and judged:
+                    raise ValueError('Assessment claim lacks a matching inventory')
+                if inventory is not None and set(judged) - set(inventory):
+                    raise ValueError('Assessment references a claim absent from its inventory')
+                for claim_id, definition in (inventory or {}).items():
+                    index, item = judged.get(claim_id, (None, {}))
+                    yield {**answer, **item, 'judge_id': assessment['judge_id'],
+                           'claim_id': claim_id, 'kind': definition['kind'],
+                           'answer_quote': definition['answer_quote'],
+                           'json_pointer': (f'/envelopes/{envelope_index}/assessments/'
+                                            f'{assessment_index}/assessment/claims/{index}'
+                                            if index is not None else None)}
+
+    return summarize_claims(records())
 
 
 def extract_unit(row, envelope, envelope_index, judge_id):
@@ -635,7 +783,7 @@ def approved_oracles(frozen):
     return index
 
 
-def render_report(output, coverage, patterns, decisions, units, scored_report=None):
+def render_report(output, coverage, patterns, decisions, units, scored_report=None, claim_stats=None):
     case_count = len({u['case_id'] for u in units})
     subjects = len({u['subject_id'] for u in units})
     judges = len({u['judge_id'] for u in units})
@@ -663,6 +811,37 @@ def render_report(output, coverage, patterns, decisions, units, scored_report=No
         lines.extend(['', '## 原始評分與分流', '',
                       '以下評分矩陣及路由統計沿用同一份凍結結果的已驗證評分報告；'
                       '後文研究歸納不重算或改寫評分。', '', text[start:end].strip(), ''])
+    if claim_stats:
+        lines.extend(['', '## Faithfulness：支持與不支持的聲明類型', '',
+                      f"逐條統計 {claim_stats['total']} 個 Judge × claim 判定；同一回答經四位 Judge 評估會計四次，"
+                      '類型可重疊，不能把下表相加當作唯一聲明數。',
+                      'faithfulness 比對當輪已提供的上下文，不等於獨立法律正確性；'
+                      'UNKNOWN 表示未能判定，NOT_APPLICABLE 不參與支持率分母。',
+                      'MISSING 表示該 Judge 未返回清單中的 claim 判定；它不計入下列類型，也不作負面判定。',
+                      '以下是明確規則可重算的寬類型；括號中的新增機制、假設事實化、'
+                      '可能性必然化、時間錯讀和省略條件只是已核對的例子，'
+                      '目前沒有逐條語義子類標註，不將寬類型數量冒稱該子類的精確數量。', '',
+                      '| 類型 | Judge × claim 條數 | 計數規則 |', '| --- | ---: | --- |'])
+        for item in claim_stats['types']:
+            lines.append(f"| {item['label']} | {item['count']} | {item['rule']} |")
+        lines.extend(['', '判定總數：'+ '、'.join(f'{name} {count}' for name,count in claim_stats['verdicts'].items())+'。', '',
+                      '| 類型 | 回答片段 | 判定與理由 | 原始位置 |', '| --- | --- | --- | --- |'])
+        labels = {item['id']: item['label'] for item in claim_stats['types']}
+        for example in claim_stats['examples']:
+            location = (f"{example['case_id']} T{example['turn']} / {example['subject_id']} / "
+                        f"Judge {example['judge_id']} / claim {example['claim_id']}")
+            cells = (labels[example['type_id']],
+                     f"{location}：「{example['answer_quote'] or ''}」",
+                     f"{example['verdict']}：{example['reason'] or ''}",
+                     example.get('json_pointer') or '未返回判定')
+            lines.append('| '+' | '.join(str(cell).replace('|','\\|').replace('\n',' ') for cell in cells)+' |')
+        disagreement = claim_stats.get('disagreement')
+        if disagreement:
+            verdicts = '、'.join(f'{judge} 判 {verdict}' for judge,verdict in
+                                sorted(disagreement['judges'].items()))
+            lines.extend(['',f"評委分歧例：{disagreement['case_id']} T{disagreement['turn']} / "
+                          f"{disagreement['subject_id']} / claim {disagreement['claim_id']}：{verdicts}。"
+                          '此類分歧須人工複核；不能僅依單一評委修改規則。'])
     lines.extend(['', '## 跨案例共同失敗模式', '',
                   '| 模式 | Judge 單位 | 唯一回答 | 案例 | 涉及案例 |',
                   '| --- | ---: | ---: | ---: | --- |'])
@@ -727,21 +906,55 @@ def render_report(output, coverage, patterns, decisions, units, scored_report=No
     (output / 'report.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
 
 
+def rerender_existing(results, output, scored_report=None):
+    manifest = json.loads((output / 'manifest.json').read_text(encoding='utf-8'))
+    validation = json.loads((output / 'validation.json').read_text(encoding='utf-8'))
+    if manifest['inputs']['results'] != file_hash(results) or validation['status'] != 'PASSED':
+        raise ValueError('Research result binding or prior validation is not valid')
+    expected_scored = manifest.get('scored_report_sha256')
+    if expected_scored and (scored_report is None or file_hash(scored_report) != expected_scored):
+        raise ValueError('Matching scored report is required for offline regeneration')
+    if not expected_scored and scored_report is not None:
+        raise ValueError('Scored report was not part of the research binding')
+    coverage = json.loads((output / 'coverage.json').read_text(encoding='utf-8'))
+    if not coverage['accepted']:
+        raise ValueError('Research coverage is incomplete')
+    patterns = json.loads((output / 'patterns.json').read_text(encoding='utf-8'))
+    decisions = json.loads((output / 'field_decisions.json').read_text(encoding='utf-8'))
+    units = [unit for group in group_units(output / 'judge_observations.jsonl').values() for unit in group]
+    stats = claim_statistics(results)
+    write_json(output / 'claim_statistics.json', stats)
+    render_report(output, coverage, patterns, decisions, units, scored_report, stats)
+    validation['report_sha256'] = file_hash(output / 'report.md')
+    validation['claim_statistics_sha256'] = file_hash(output / 'claim_statistics.json')
+    write_json(output / 'validation.json', validation)
+    return stats
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--results', type=Path, required=True)
-    parser.add_argument('--frozen-input', type=Path, required=True)
-    parser.add_argument('--capsules', type=Path, required=True)
-    parser.add_argument('--wiki-nodes', type=Path, required=True)
+    parser.add_argument('--frozen-input', type=Path)
+    parser.add_argument('--capsules', type=Path)
+    parser.add_argument('--wiki-nodes', type=Path)
     parser.add_argument('--scored-report', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--execute', action='store_true')
+    parser.add_argument('--rerender', action='store_true', help='Regenerate from validated checkpoints without provider calls')
     parser.add_argument('--workers', type=int, default=4)
     parser.add_argument('--max-turns', type=int)
     parser.add_argument('--max-unavailable', type=float, default=0.10)
     args = parser.parse_args(argv)
     if not 1 <= args.workers <= 10 or not 0 <= args.max_unavailable <= 0.10:
         parser.error('workers must be 1..10 and max-unavailable 0..0.10')
+    if args.rerender:
+        if args.execute:
+            parser.error('--rerender cannot be combined with --execute')
+        stats = rerender_existing(args.results, args.output, args.scored_report)
+        print(f"Regenerated report offline from {stats['total']} Judge × claim records.")
+        return 0
+    if not all((args.frozen_input,args.capsules,args.wiki_nodes)):
+        parser.error('--frozen-input, --capsules and --wiki-nodes are required unless --rerender is used')
     args.output.mkdir(parents=True, exist_ok=True)
     inputs = {name: file_hash(path) for name,path in
               [('results',args.results),('frozen_input',args.frozen_input),('capsules',args.capsules)]}
@@ -815,11 +1028,14 @@ def main(argv=None):
     write_json(args.output / 'field_decisions.json',decisions)
     accepted = coverage['accepted'] and not field_errors
     if accepted:
-        render_report(args.output,coverage,patterns,decisions,units,args.scored_report)
+        stats = claim_statistics(args.results)
+        write_json(args.output / 'claim_statistics.json', stats)
+        render_report(args.output,coverage,patterns,decisions,units,args.scored_report,stats)
     write_json(args.output / 'validation.json', {'status':'PASSED' if accepted else 'INCOMPLETE',
                'coverage':coverage, 'failed_turns':errors, 'failed_field_reviews':field_errors,
                'report_written':accepted,
                'report_sha256':file_hash(args.output/'report.md') if accepted else None,
+               'claim_statistics_sha256':file_hash(args.output/'claim_statistics.json') if accepted else None,
                'scored_report_sha256':file_hash(args.scored_report) if args.scored_report else None})
     print(f"Analyzed {coverage['analyzed']}/{coverage['planned']} Judge units; "
           f"report {'written' if accepted else 'pending'}; {len(errors)} failed turns; "

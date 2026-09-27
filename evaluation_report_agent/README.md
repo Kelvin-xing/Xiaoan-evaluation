@@ -40,3 +40,15 @@ PYTHONPATH=.:evaluation python -m evaluation_report_agent.research \
 第一條只抽取並驗證矩陣，沒有 API 呼叫。第二條重用成功的逐輪與逐模式檢查點；`--max-turns 1 --workers 1` 可先做一次收費試跑。報告需至少 90% 評委單位可分析，並逐一標記 32 格 Subject×Judge 覆蓋；未分析或不適用的理由不補零、不當作低分。所有輪次會先嘗試，才進入欄位審核；未過門檻或欄位審核未完成時 `validation.json` 為 `INCOMPLETE`，不交付完整報告。
 
 `judge_observations.jsonl` 保存逐評委判語、trace 與原始封套 pointer；`turns/` 保存模型編碼，`coded_observations.jsonl` 保存全部 3,200 個單位的處理狀態。`patterns.json` 同時按評委單位、唯一回答和案例計數；`field_requests/`、`field_reviews/` 保存由跨案例理由到具體現行鍵位的審核。`field_decisions.json` 包含每個盤點鍵位，包括無修改證據者。最終 `report.md` 把同份凍結結果的評分矩陣、路由統計與研究發現依序整合，逐鍵位四欄表只展示有案例證據的候選。任何建議均待固定其他環節後單鍵位重播、核對來源與人工審核，不能把現行檔案當作歷史執行版本的證明。
+
+報告在評分矩陣後加入 Faithfulness 類型統計及可追溯例子。`claim_statistics.json` 從原始 `results.json` 的 inventory、assessment 判定及上下文證據層重算，單位是 Judge × claim，不是唯一回答；類型可重疊。支持類按使用者陳述、安全提示、Capsule、SOURCE 證據歸類；未支持類按 FACTUAL、INTERPRETIVE、法律／證據場景的 ACTION／RECOMMENDATION 歸類，另列全部 CONTRADICTED 和 PARTIAL。沒有逐條語義細分的「自行補出機制」「假設當事實」「省略條件」只作例子，不能將其寬類型計數當作該細分的數量。UNKNOWN、NOT_APPLICABLE 及 MISSING 各自保留。缺少精選例子時從對應類型選取可追溯樣例。
+
+只改報告模板時，使用已驗收的研究檢查點離線重生，無需再呼叫評委或研究模型：
+
+```bash
+PYTHONPATH=.:evaluation python -m evaluation_report_agent.research \
+  --results runs/example/results.json --output runs/example/research \
+  --scored-report runs/example/scored/report-full-33-cases.md --rerender
+```
+
+這個入口核對原結果與已綁定評分報告的雜湊，重算 claim 統計，重生 `report.md` 並更新 `validation.json` 的報告雜湊；不更動原有評分、逐輪編碼或鍵位審核。

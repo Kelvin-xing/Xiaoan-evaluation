@@ -4,7 +4,7 @@ import pytest
 
 from evaluation_report_agent.research import (
     candidate_fields, code_turn, collect, compact_unit, extract_unit, field_decisions,
-    field_inventory, field_payload, render_report, summarize_patterns,
+    field_inventory, field_payload, render_report, rerender_existing, summarize_claims, summarize_patterns,
     validate_coding, validate_field_review,
 )
 
@@ -128,3 +128,63 @@ def test_invalid_large_response_retries_in_checkpointed_slices(tmp_path):
     assert path.exists() and len(json.loads(path.read_text())['units']) == 9
     assert code_turn(tmp_path,('TC-01',1),units,provider,'binding') == path
     assert calls == [9,9,9,8,1]
+
+
+def test_claim_types_count_judge_claims_and_allow_evidence_overlap(tmp_path):
+    base = {'case_id':'TC-18','turn':1,'subject_id':'claude-sonnet-5',
+            'judge_id':'claude-sonnet-5','claim_id':'c3','answer_quote':'原句',
+            'reason':'理由','kind':'FACTUAL','scenario_category':'coercion_and_abuse',
+            'context_layers':{'user':'CURRENT_INPUT','capsule':'CAPSULE'}}
+    claims = [
+        {**base,'verdict':'ENTAILED','evidence':[{'ref':'user'},{'ref':'capsule'},{'ref':'capsule'}]},
+        {**base,'claim_id':'c4','verdict':'UNKNOWN','evidence':[]},
+        {**base,'claim_id':'c5','verdict':'UNSUPPORTED','evidence':[]},
+        {**base,'claim_id':'c6','verdict':'PARTIAL','evidence':[]},
+        {**base,'claim_id':'c7','verdict':'CONTRADICTED','evidence':[]},
+    ]
+    stats = summarize_claims(claims)
+    counts = {item['id']:item['count'] for item in stats['types']}
+    assert stats['total'] == 5 and stats['verdicts']['UNKNOWN'] == 1
+    assert counts['user_fact'] == counts['capsule_supported'] == 1
+    assert counts['unsupported_fact'] == counts['partial'] == counts['contradicted'] == 1
+    assert len(stats['examples']) == 5
+    assert stats['examples'][0]['type_id'] == 'user_fact'
+    coverage = {'planned':1,'analyzed':1,'unavailable':0,'unavailable_ratio':0,
+                'matrix':[{'subject_id':'claude-sonnet-5','judge_id':'claude-sonnet-5',
+                           'analyzed':1,'planned':1,'comparable':True}]}
+    render_report(tmp_path,coverage,[],[],[unit('claude-sonnet-5')],claim_stats=stats)
+    report = (tmp_path/'report.md').read_text()
+    assert 'Faithfulness：支持與不支持的聲明類型' in report
+    assert '| 已支持：依使用者陳述復述事實 | 1 |' in report
+    assert 'UNKNOWN 1' in report and 'TC-18 T1' in report
+
+
+def test_rerender_requires_bound_results_and_uses_no_provider(tmp_path, monkeypatch):
+    from evaluation_report_agent.evidence import file_hash
+    results = tmp_path/'results.json'
+    results.write_text('{}')
+    (tmp_path/'manifest.json').write_text(json.dumps({'inputs':{'results':file_hash(results)}}))
+    (tmp_path/'validation.json').write_text(json.dumps({'status':'PASSED','report_written':True}))
+    (tmp_path/'coverage.json').write_text(json.dumps({'accepted':True,'planned':1,
+        'analyzed':1,'unavailable':0,'unavailable_ratio':0,'matrix':[]}))
+    (tmp_path/'patterns.json').write_text('[]')
+    (tmp_path/'field_decisions.json').write_text('[]')
+    (tmp_path/'judge_observations.jsonl').write_text(json.dumps(unit('j'))+'\n')
+    monkeypatch.setattr('evaluation_report_agent.research.claim_statistics',
+                        lambda _: {'unit':'judge_claim','total':0,'verdicts':{},'types':[],'examples':[]})
+    rerender_existing(results,tmp_path)
+    validation = json.loads((tmp_path/'validation.json').read_text())
+    assert validation['report_sha256'] == file_hash(tmp_path/'report.md')
+    assert validation['claim_statistics_sha256'] == file_hash(tmp_path/'claim_statistics.json')
+    results.write_text('{"changed":true}')
+    with pytest.raises(ValueError,match='binding'):
+        rerender_existing(results,tmp_path)
+
+
+def test_disagreement_only_appears_for_matching_claim_across_judges():
+    base = {'case_id':'TC-01','turn':1,'subject_id':'claude-sonnet-5',
+            'claim_id':'c2','kind':'FACTUAL','evidence':[]}
+    summary = summarize_claims([{**base,'judge_id':'j1','verdict':'PARTIAL'},
+                                {**base,'judge_id':'j2','verdict':'ENTAILED'}])
+    assert summary['disagreement']['judges'] == {'j1':'PARTIAL','j2':'ENTAILED'}
+    assert summarize_claims([{**base,'judge_id':'j1','verdict':'PARTIAL'}])['disagreement'] is None
