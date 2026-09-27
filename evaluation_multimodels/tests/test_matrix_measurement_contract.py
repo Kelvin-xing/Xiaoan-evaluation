@@ -29,11 +29,37 @@ def test_matrix_renderers_share_weighted_total_and_dimension_summary(tmp_path):
     assert [cell.value for cell in wb["Overview"][1]] == ["metric", "value", "status", "note"]
     assert [cell.value for cell in wb["Score Summary"][1]][:4] == ["subject_id", "judge_id", "rubric_average", "faithfulness_average"]
     assert [cell.value for cell in wb["Coverage & Usage"][1]] == ["section", "metric", "value", "status", "note"]
+    assert [wb["Routing Summary"].cell(1, col).value for col in range(11, 18)] == [
+        "TP", "FN", "FP", "TN", "TPR", "FPR", "hard_label_AUROC",
+    ]
+    assert wb["Routing Summary"]["Q2"].value == "UNAVAILABLE"
     assert [cell.value for cell in wb["Measurement_Contract"][1]] == ["section", "field", "value"]
     assert "raw_scores_json" not in [cell.value for cell in wb["Dimension_Statistics"][1]]
     assert wb["Matrix"]["B2"].value == 1
     assert "| s | 1.0000 |" in report
     assert wb["Dimension_By_Judge"]["C2"].value == 0
+    wb.close()
+
+
+def test_crisis_operating_point_by_subject_judge(tmp_path):
+    from copy import deepcopy
+
+    data = []
+    for index, (expected, actual) in enumerate([
+        ("crisis_sop", "crisis_sop"), ("crisis_sop", "baseline"),
+        ("baseline", "crisis_sop"), ("baseline", "baseline"),
+    ]):
+        item = deepcopy(rows()[0])
+        item.update(answer_id=f"a{index}", case_id=f"TC-{index}", turn=1,
+                    expected_turns=[1], routing={"expected_route": expected, "actual_route": actual,
+                                                  "accepted": expected == actual, "preferred": expected == actual})
+        data.append(item)
+    path = tmp_path / "crisis.xlsx"
+    write_matrix_workbook(data, path)
+    wb = load_workbook(path, data_only=True)
+    routing = wb["Routing Summary"]
+    assert [routing.cell(2, col).value for col in range(11, 18)] == [1, 1, 1, 1, .5, .5, .5]
+    assert routing["A6"].value == "expected_route \\ actual_route"
     wb.close()
 
 

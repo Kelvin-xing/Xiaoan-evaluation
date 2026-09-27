@@ -138,10 +138,22 @@ def assessment_request(row, inventory, judge):
             "oracle_status": row.get("oracle_status", "provisional"),
             "observations": {ident: {"status": obs["status"], "value": obs.get("value")}
                              for ident, obs in observations.items()}}
-    return {"contract": VERSION, "task": "assess_claims", "response_schema": schema("claim-assessment"), "validator_version": "frozen/v2", "identity": judge,
+    context_refs = [unit["ref"] for unit in data["context"]]
+    truth_refs = [unit["ref"] for unit in data["reference_facts"]]
+    guidance = (
+        "For faithfulness evidence use ONLY context refs: " + json.dumps(context_refs, ensure_ascii=False) + ". "
+        "For correctness evidence use ONLY reference_facts refs: " + json.dumps(truth_refs, ensure_ascii=False) + ". "
+        "The answer and inventory are not evidence refs. Never invent or translate a ref. "
+        "SUPPORTIVE claims require NOT_APPLICABLE on both axes; ACTION and RECOMMENDATION require "
+        "correctness NOT_APPLICABLE. When context is not EXPOSED, applicable faithfulness is UNKNOWN; "
+        "when reference_facts is empty, applicable correctness is UNKNOWN. "
+        "Every ENTAILED, PARTIAL or CONTRADICTED verdict needs exact quoted evidence with Unicode code-point "
+        "start/end offsets; when you cannot quote it exactly, do not assert that verdict."
+    )
+    return {"contract": VERSION, "task": "assess_claims", "response_schema": schema("claim-assessment"), "validator_version": "frozen/v3", "identity": judge,
             "binding": digest(data), **data,
             "instructions": (
-                prompt("claim-assessment.md")
+                prompt("claim-assessment.md") + "\n\n" + guidance
             )}
 
 

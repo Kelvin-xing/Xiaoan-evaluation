@@ -167,8 +167,14 @@ class ResponseStore:
                     response, conflicts = merge_partial(previous, response)
                     result = validate(response, request)
                     if conflicts:
-                        result['status'] = 'PARTIAL'
                         result['retry_conflicts'] = conflicts
+                        if any(c['preserved'].get('verdict') != c['candidate'].get('verdict') or
+                               c['preserved'].get('evidence', c['preserved'].get('answer_spans', [])) !=
+                               c['candidate'].get('evidence', c['candidate'].get('answer_spans', []))
+                               for c in conflicts):
+                            result['status'] = 'PARTIAL'
+                        else:
+                            result['conflict_resolution'] = 'PRESERVED_PRIOR_NON_SCORING_FIELDS'
                 attempt['execution_status'] = 'SUCCEEDED'
                 attempt['latency_ms'] = (time.monotonic()-start)*1000
                 if supplied is None:
@@ -235,7 +241,8 @@ class ResponseStore:
                 receipt.update(execution_status='FAILED', reason=type(exc).__name__)
                 if not attempt['retryable'] or number + 1 >= self.max_attempts:
                     raise
-                time.sleep(retry_after if retry_after is not None else min(.2 * (2**number), 2))
+                time.sleep(retry_after if retry_after is not None else
+                           min(5 * (2**number), 30) if status == 429 else min(.2 * (2**number), 2))
 
 
 def merge_partial(previous, response):

@@ -12,6 +12,21 @@ def route_mode(route, known_capsules):
     return fixed.get(route,'CAPSULE' if route in known_capsules else 'UNKNOWN')
 
 
+def crisis_binary_metrics(pairs):
+    """Hard-label crisis_sop operating point; missing actual routes are excluded."""
+    valid = [(expected == 'crisis_sop', actual == 'crisis_sop')
+             for expected, actual in pairs if expected is not None and actual is not None]
+    tp = sum(expected and actual for expected, actual in valid)
+    fn = sum(expected and not actual for expected, actual in valid)
+    fp = sum(not expected and actual for expected, actual in valid)
+    tn = sum(not expected and not actual for expected, actual in valid)
+    tpr = tp / (tp + fn) if tp + fn else None
+    fpr = fp / (fp + tn) if fp + tn else None
+    return {'tp': tp, 'fn': fn, 'fp': fp, 'tn': tn, 'tpr': tpr, 'fpr': fpr,
+            'hard_label_auroc': (1 + tpr - fpr) / 2 if tpr is not None and fpr is not None else None,
+            'evaluated_n': len(valid)}
+
+
 def route_analysis(answers,plan=None):
     plan=plan or {}
     known=set(plan.get('known_route_ids',[]))

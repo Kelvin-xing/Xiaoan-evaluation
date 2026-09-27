@@ -26,6 +26,7 @@ from .rules import RatingRule
 from .scoring import SCORING_CONTRACT_VERSION, TurnQuality, score_case
 from .methodology_metrics import robust_dimension_summary, self_judging
 from .methodology_runtime import build_matrix_summaries, run_attribution_pass
+from xiaoan_eval_core.routing import crisis_binary_metrics
 
 try:
     from openpyxl import Workbook
@@ -1194,6 +1195,7 @@ def _routing_summary(matching: Sequence[Mapping[str, Any]]) -> tuple[list[str], 
         matrix.append([expected, *[sum(1 for item in route_rows if item.get("expected_route") == expected and item.get("actual_route") == actual) for actual in actuals]])
     evaluated = [item for item in route_rows if item.get("accepted") is not None]
     preferred = [item for item in route_rows if item.get("preferred") is not None]
+    crisis = crisis_binary_metrics((item.get("expected_route"), item.get("actual_route")) for item in route_rows)
     stats = [
         len({(row.get("case_id"), row.get("turn")) for row in matching}),
         len([item for item in route_rows if item.get("actual_route") and item.get("expected_route")]),
@@ -1203,10 +1205,14 @@ def _routing_summary(matching: Sequence[Mapping[str, Any]]) -> tuple[list[str], 
         sum(bool(item.get("preferred")) for item in preferred),
         len(preferred),
         _average([float(bool(item.get("preferred"))) for item in preferred]),
+        crisis["tp"], crisis["fn"], crisis["fp"], crisis["tn"],
+        crisis["tpr"] if crisis["tpr"] is not None else "UNAVAILABLE",
+        crisis["fpr"] if crisis["fpr"] is not None else "UNAVAILABLE",
+        crisis["hard_label_auroc"] if crisis["hard_label_auroc"] is not None else "UNAVAILABLE",
         sum(1 for item in route_rows if item.get("actual_route") is None),
         sum(1 for item in route_rows if item.get("expected_route") is None),
     ]
-    return ["planned_turns", "matrix_turns", "accepted_hit_n", "accepted_evaluated_n", "accepted_hit_rate", "preferred_hit_n", "preferred_evaluated_n", "preferred_accuracy", "unknown_route", "missing_expected_route"], stats, actuals, matrix
+    return ["planned_turns", "matrix_turns", "accepted_hit_n", "accepted_evaluated_n", "accepted_hit_rate", "preferred_hit_n", "preferred_evaluated_n", "preferred_accuracy", "TP", "FN", "FP", "TN", "TPR", "FPR", "hard_label_AUROC", "unknown_route", "missing_expected_route"], stats, actuals, matrix
 
 
 def write_matrix_workbook(rows: Sequence[Mapping[str, Any]], path: Path, *, analysis=None) -> None:
@@ -1214,6 +1220,7 @@ def write_matrix_workbook(rows: Sequence[Mapping[str, Any]], path: Path, *, anal
     if Workbook is None:
         raise RuntimeError("openpyxl is required to write matrix workbooks")
 
+    from openpyxl.comments import Comment
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
@@ -1314,8 +1321,11 @@ def write_matrix_workbook(rows: Sequence[Mapping[str, Any]], path: Path, *, anal
             routing_blocks.append((subject, judge, stat_names, actuals, matrix_rows))
     write_presentation_table(
         routing_sheet,
-        ("subject_id", "judge_id", "planned_turns", "matrix_turns", "accepted_hit_n", "accepted_evaluated_n", "accepted_hit_rate", "preferred_hit_n", "preferred_evaluated_n", "preferred_accuracy", "unknown_route", "missing_expected_route"),
+        ("subject_id", "judge_id", "planned_turns", "matrix_turns", "accepted_hit_n", "accepted_evaluated_n", "accepted_hit_rate", "preferred_hit_n", "preferred_evaluated_n", "preferred_accuracy", "TP", "FN", "FP", "TN", "TPR", "FPR", "hard_label_AUROC", "unknown_route", "missing_expected_route"),
         routing_stats,
+    )
+    routing_sheet["Q1"].comment = Comment(
+        "crisis_sop 為正類。硬分類 ROC 僅有 (0,0)、(FPR,TPR)、(1,1) 三點；此欄為三點梯形面積，不是連續危機分數的閾值 ROC-AUC。缺失實際路由排除。", "XiaoAn"
     )
     next_row = routing_sheet.max_row + 3
     for subject, judge, stat_names, actuals, matrix_rows in routing_blocks:

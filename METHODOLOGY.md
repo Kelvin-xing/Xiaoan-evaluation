@@ -482,6 +482,14 @@ calibration/<calibration-id>/
 - **發布前驗證**：generation 綁定、引用存在且已曝光、引文逐字匹配、數值與分母、findings 與 Markdown 一致；明示閱讀覆蓋。**引用正確不等於推論已被人工認可。**
 - **產物**：`report.md`、`findings.json`、manifest、validation、查詢日誌、request receipts；用量另計。失敗保留 draft，可獨立有界重試並重用相同成功請求。
 
+### 11.1 全量逐評委研究（獨立入口）
+
+`evaluation_report_agent.research` 在上述優先線索報告之外，對凍結計劃逐一建立 Subject × Judge × turn 觀察。先從每位 Judge 的扣分理由與部分可用評估提取失敗模式，再以跨案例模式對照當前 Safety、Router、Ground、Capsule、Wiki、Composer 等環節及具體鍵位。它不重評、不修改原始結果，也不把評委理由直接視為已確認的程式根因。
+
+每個觀察須可追溯至評估封套；模式同時報評委單位、唯一回答及案例的計數。逐輪編碼和逐模式鍵位審核分別檢查點續接。交付條件為至少 90% 計劃評委單位可分析，32 個 Subject × Judge 格位逐格交代覆蓋，且鍵位審核完成；不可用與不適用不補零。四欄建議表只展示有案例證據、現行鍵位及可測試修改假設的候選，其餘鍵位留在 `field_decisions.json` 供審核。最終報告將同一凍結結果的原評分矩陣與研究發現依邏輯順序整合。
+
+本 repo 的[已發布研究與凍結結果](evaluation_multimodels/runs/minimal33-eight-four-assessment-retry-final-20260927/README.md)記錄 3,198／3,200 個可分析評委單位及 2 個不可用單位；詳見其中的 `validation.json` 和 `manifest.json`。操作與欄位契約見 [`evaluation_report_agent/README.md`](evaluation_report_agent/README.md)。
+
 <a id="improvement"></a>
 ## 12. 從結果到產品修改
 
@@ -527,7 +535,7 @@ calibration/<calibration-id>/
 - Minimal33 的 case 分類軸標記；
 - 多輪 contextual Answer Relevancy；
 - rubric 維度逐情境適用性（N/A）規則；
-- 更大規模的 live 驗證（目前 live 範圍為 TC-35 與 2026-09-26 的 Minimal33 6×4 試跑，後者 assessment 分支仍在補評）；
+- 更大規模的跨版本 live 驗證與受控修改效果測試；目前已發布的 Minimal33 8×4 凍結結果與逐評委研究並不檢驗修改後 Chatflow 的效果；
 - Pairwise、capsule ablation、stability 與受控實驗保留為獨立研究工具，不在預設流程。
 
-離線測試（canonical 452 passed、matrix 415 passed）與合成端到端只證明資料流與契約正確，**不代表模型品質或 live provider 成功**。
+離線測試與合成端到端只證明資料流與契約正確，**不代表模型品質或 live provider 成功**；測試數量以本次實際執行結果為準。

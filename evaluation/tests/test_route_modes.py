@@ -1,6 +1,17 @@
 from copy import deepcopy
 import pytest
-from xiaoan_eval_core.routing import route_analysis
+from xiaoan_eval_core.routing import crisis_binary_metrics, route_analysis
+
+
+def test_crisis_hard_label_roc_counts_and_missingness():
+    point = crisis_binary_metrics([
+        ('crisis_sop', 'crisis_sop'), ('crisis_sop', 'baseline'),
+        ('baseline', 'crisis_sop'), ('baseline', 'baseline'),
+        ('crisis_sop', None), (None, 'crisis_sop'),
+    ])
+    assert point == {'tp': 1, 'fn': 1, 'fp': 1, 'tn': 1, 'tpr': .5, 'fpr': .5,
+                     'hard_label_auroc': .5, 'evaluated_n': 4}
+    assert crisis_binary_metrics([('crisis_sop', 'baseline')])['hard_label_auroc'] is None
 
 
 def row(turn,preferred,actual,accepted=None,status='reviewed'):
@@ -51,6 +62,12 @@ def test_workbook_and_report_show_matrix_without_judge_duplication(tmp_path):
     assert r['aggregates']['routing']['summary'][0]['planned_turns']==1 # fixture has two judges
     path=export_results_workbook(r,tmp_path/'results.xlsx');wb=load_workbook(path,read_only=True)
     assert any('危機模式' in str(x[1]) for x in wb['Routing Summary'].values)
+    routing_sheet = wb['Routing Summary']
+    assert [routing_sheet.cell(4, col).value for col in range(8, 15)] == [
+        'TP', 'FN', 'FP', 'TN', 'TPR', 'FPR', '硬分類 AUROC',
+    ]
+    assert routing_sheet['N5'].value == 'UNAVAILABLE'
+    assert routing_sheet['A4'].value == '模型'
     assert not any('路由' in str(x[0]) for x in wb['Score Summary'].values if x[0] is not None)
     store=SimpleNamespace(result=r,generation=r['result_generation'],exposed={},sources={})
     text=render_readable({'title':'測試','findings':[],'facts':[]},store)

@@ -9,7 +9,7 @@ from xiaoan_eval.frozen_cli import execute_frozen
 from xiaoan_eval.frozen_generation import generate
 from xiaoan_eval.frozen_ingress import build_plan, freeze_answer
 from xiaoan_eval.frozen_retry import retry_evaluation, extend_judges, import_successful_checkpoints
-from xiaoan_eval_core.results import validate_complete_results
+from xiaoan_eval_core.results import seal_complete_results, validate_complete_results
 
 
 def frozen_fixture():
@@ -41,6 +41,75 @@ def test_only_failed_rubric_is_called_and_parent_is_unchanged(tmp_path):
     assert child['envelopes'][1]['assessments']==original['envelopes'][1]['assessments']
     assert json.loads((tmp_path/'parent/results.json').read_text())==original
     assert len(list((tmp_path/'child/checkpoint').glob('*.events.jsonl')))==1
+
+
+def test_in_place_retry_replaces_sealed_result_without_rerunning_successes(tmp_path):
+    spec=frozen_fixture()
+    target=spec['rows'][0]['answer_id']
+    class First(FixtureProvider):
+        def __call__(self, request):
+            if request['task']=='rubric' and request['answer_id']==target:
+                raise ValueError('offline fixture failure')
+            return super().__call__(request)
+    parent=execute_frozen(spec,tmp_path/'run',provider=First())
+    before={p.name:(p.read_bytes(),p.stat().st_mtime_ns) for p in (tmp_path/'run/checkpoint').glob('*.json')}
+    calls=[]
+    class Retry(FixtureProvider):
+        def __call__(self, request):
+            calls.append((request['task'],request['answer_id']))
+            return super().__call__(request)
+    result=retry_evaluation(spec,parent,tmp_path/'run',stages=['rubric'],provider=Retry())
+    assert calls==[('rubric',target)]
+    assert result['result_generation']!=parent['result_generation']
+    assert validate_complete_results(json.loads((tmp_path/'run/results.json').read_text()))==result
+    assert all(e['rubric'][0]['status']=='AVAILABLE' for e in result['envelopes'])
+    assert all((tmp_path/'run/checkpoint'/name).read_bytes()==data and
+               (tmp_path/'run/checkpoint'/name).stat().st_mtime_ns==stamp
+               for name,(data,stamp) in before.items())
+
+
+def test_conflict_only_reconciliation_keeps_semantic_disputes_for_review(tmp_path):
+    from xiaoan_eval.frozen_retry import reconcile_assessment_conflicts
+    spec=frozen_fixture()
+    parent=execute_frozen(spec,tmp_path/'run',provider=FixtureProvider())
+    original=deepcopy(parent['envelopes'][0]['assessments'][0]['assessment']['requirements'][0])
+    wording=deepcopy(original)
+    wording['reason']='alternative explanation'
+    semantic=deepcopy(original)
+    semantic['verdict']='VIOLATED' if original['verdict']!='VIOLATED' else 'UNCERTAIN'
+    for env,candidate in zip(parent['envelopes'],(wording,semantic)):
+        cell=env['assessments'][0]
+        cell['status']=cell['assessment']['status']='PARTIAL'
+        cell['assessment']['retry_conflicts']=[{'requirement_id':original['id'],
+                                                'preserved':deepcopy(original),'candidate':candidate}]
+    seal_complete_results(parent)
+    (tmp_path/'run/results.json').write_text(json.dumps(parent,ensure_ascii=False))
+    summary=reconcile_assessment_conflicts(deepcopy(parent))
+    assert summary=={'resolved_non_scoring':1,'needs_review':1}
+    result=retry_evaluation(spec,parent,tmp_path/'run',stages=['assessment'],
+                            provider=lambda _:pytest.fail('no provider call for conflict-only cells'))
+    assert [e['assessments'][0]['status'] for e in result['envelopes']]==['AVAILABLE','PARTIAL']
+    assert result['envelopes'][0]['assessments'][0]['assessment']['retry_conflicts']
+    assert result['envelopes'][1]['assessments'][0]['assessment']['conflict_review']=='REQUIRED'
+
+
+def test_conflict_only_mode_publishes_in_place_without_provider(tmp_path):
+    spec=frozen_fixture()
+    parent=execute_frozen(spec,tmp_path/'run',provider=FixtureProvider())
+    cell=parent['envelopes'][0]['assessments'][0]
+    saved=deepcopy(cell['assessment']['requirements'][0])
+    alternative={**saved,'reason':'different explanation'}
+    cell['status']=cell['assessment']['status']='PARTIAL'
+    cell['assessment']['retry_conflicts']=[{'requirement_id':saved['id'],
+                                            'preserved':saved,'candidate':alternative}]
+    seal_complete_results(parent)
+    (tmp_path/'run/results.json').write_text(json.dumps(parent,ensure_ascii=False))
+    result=retry_evaluation(spec,parent,tmp_path/'run',reconcile_only=True,
+                            provider=lambda _:pytest.fail('offline mode called provider'))
+    assert result['envelopes'][0]['assessments'][0]['status']=='AVAILABLE'
+    assert result['provenance'][-1]['operation']=='reconcile_assessment_conflicts'
+    assert result['aggregates']['answer_costs']==parent['aggregates']['answer_costs']
+    validate_complete_results(json.loads((tmp_path/'run/results.json').read_text()))
 
 
 def test_runtime_concurrency_change_reuses_successful_checkpoint_without_rewriting_it(tmp_path):
@@ -128,6 +197,33 @@ def test_add_judge_keeps_original_manifest_answers_and_successful_checkpoint(tmp
     assert child['provenance'][-1]['execution_limits']['provider_max_inflight'] == 30
 
 
+def test_appended_judge_checkpoint_outside_selected_answers_stays_unselected(tmp_path):
+    spec = frozen_fixture()
+    added = {**IDENTITY, 'id': 'new-judge'}
+    extended = extend_judges(spec, [added])
+
+    class NoExtraction(FixtureProvider):
+        def __call__(self, request):
+            if request['task'] == 'extract_claims':
+                raise ValueError('fixture extraction unavailable')
+            return super().__call__(request)
+
+    parent = execute_frozen(spec, tmp_path / 'parent', provider=NoExtraction())
+    execute_frozen(extended, tmp_path / 'source', provider=FixtureProvider())
+    selected = spec['rows'][0]['answer_id']
+    child = retry_evaluation(extended, parent, tmp_path / 'child', answer_ids=[selected],
+                             provider=FixtureProvider(), checkpoint_sources=[tmp_path / 'source'])
+    validate_complete_results(child)
+    selected_env = next(e for e in child['envelopes'] if e['answer_id'] == selected)
+    other_env = next(e for e in child['envelopes'] if e['answer_id'] != selected)
+    assert selected_env['inventory_id'] is not None
+    assert other_env['inventory_id'] is None
+    assert next(c for c in other_env['assessments'] if c['judge_id'] == added['id']) == {
+        'answer_id': other_env['answer_id'], 'case_id': 'TC-35', 'turn': 2,
+        'subject_id': IDENTITY['id'], 'judge_id': added['id'], 'judge_identity': added,
+        'status': 'UNAVAILABLE', 'execution_status': 'SKIPPED', 'reason': 'NOT_SELECTED'}
+
+
 def test_assessment_retry_reuses_inventory_without_extraction_call(tmp_path):
     spec=frozen_fixture()
     class First(FixtureProvider):
@@ -145,6 +241,43 @@ def test_assessment_retry_reuses_inventory_without_extraction_call(tmp_path):
     assert calls==['assess_claims']
     assert len(child['inventories'])==len(original['inventories'])==2
     assert all(env['assessments'][0]['status']=='AVAILABLE' for env in child['envelopes'])
+
+
+def test_assessment_retry_supplies_preserved_inventory_when_extraction_cache_misses(tmp_path):
+    spec=frozen_fixture()
+    target=spec['rows'][0]['answer_id']
+    class First(FixtureProvider):
+        def __call__(self,request):
+            if request['task']=='assess_claims' and request['answer_id']==target:
+                raise ValueError('fixture failure')
+            return super().__call__(request)
+    parent=execute_frozen(spec,tmp_path/'parent',provider=First())
+    for receipt in parent['stages']:
+        if receipt.get('task')=='extract_claims' and receipt.get('answer_id')==target:
+            receipt.pop('raw_response',None)
+    seal_complete_results(parent)
+    calls=[]
+    class Retry(FixtureProvider):
+        def __call__(self,request):
+            calls.append(request['task'])
+            return super().__call__(request)
+    child=retry_evaluation(spec,parent,tmp_path/'child',stages=['assessment'],
+                           answer_ids=[target],provider=Retry())
+    assert calls==['assess_claims']
+    assert child['envelopes'][0]['assessments'][0]['status']=='AVAILABLE'
+    assert child['envelopes'][0]['inventory_id']==parent['envelopes'][0]['inventory_id']
+    assert all('inventory' not in row for row in child['answers'])
+    assert len([receipt for receipt in child['stages'] if receipt.get('task')=='extract_claims']) == len(
+        [receipt for receipt in parent['stages'] if receipt.get('task')=='extract_claims'])
+    legacy=deepcopy(child)
+    preserved=next(inv for inv in child['inventories'] if inv['answer_id']==target)
+    legacy['answers'][0]['inventory']={
+        'binding':preserved['binding'],
+        'claims':preserved['claims']}
+    seal_complete_results(legacy)
+    with pytest.raises(ValueError,match='No unavailable selected stage cells'):
+        retry_evaluation(spec,legacy,tmp_path/'followup',stages=['rubric'],
+                         answer_ids=[target],dry_run=True)
 
 
 def test_missing_inventory_is_extracted_before_selected_assessment(tmp_path):
@@ -190,6 +323,94 @@ def test_partial_assessment_is_retried_not_cached_as_success(tmp_path):
     assert calls==[('assess_claims',target)]
     assert child['envelopes'][0]['assessments'][0]['status']=='AVAILABLE'
     assert child['envelopes'][1]['assessments']==parent['envelopes'][1]['assessments']
+
+
+def test_v2_partial_migrates_valid_dimension_into_v3_request(tmp_path):
+    from xiaoan_eval_core.contracts import digest
+    from xiaoan_eval_core.configuration import prompt
+    spec=frozen_fixture()
+    target=spec['rows'][0]['answer_id']
+    class First(FixtureProvider):
+        def __call__(self, request):
+            response=super().__call__(request)
+            if request['task']=='assess_claims' and request['answer_id']==target:
+                response['payload']['claims'][0]['faithfulness']['evidence']=[
+                    {'ref':'unknown','start':0,'end':1,'text':'x'}]
+            return response
+    parent=execute_frozen(spec,tmp_path/'parent',provider=First())
+    prior=parent['envelopes'][0]['assessments'][0]['assessment']['claims'][0]['correctness']
+    receipt=next(r for r in parent['stages'] if r['task']=='assess_claims'
+                 and r['answer_id']==target and r.get('availability')=='PARTIAL')
+    old_request=deepcopy(receipt['request'])
+    old_request['validator_version']='frozen/v2'
+    old_request['instructions']=prompt('claim-assessment.md')
+    old_key=digest(old_request)
+    receipt.update(request=old_request,request_digest=old_key,stage_id=old_key)
+    seal_complete_results(parent)
+    class Retry(FixtureProvider):
+        def __call__(self, request):
+            response=super().__call__(request)
+            if request['task']=='assess_claims' and request['answer_id']==target:
+                response['payload']['claims'][0]['correctness']['reason']='new wording'
+            return response
+    child=retry_evaluation(spec,parent,tmp_path/'child',stages=['assessment'],provider=Retry())
+    cell=child['envelopes'][0]['assessments'][0]
+    assert cell['status']=='AVAILABLE'
+    assert cell['assessment']['claims'][0]['correctness']==prior
+    assert cell['assessment']['retry_conflicts']
+
+
+def test_unavailable_only_preserves_partial_assessment(tmp_path):
+    spec=frozen_fixture()
+    partial_id,unavailable_id=(row['answer_id'] for row in spec['rows'])
+    class First(FixtureProvider):
+        def __call__(self,request):
+            if request['task']=='assess_claims' and request['answer_id']==unavailable_id:
+                raise ValueError('fixture failure')
+            response=super().__call__(request)
+            if request['task']=='assess_claims' and request['answer_id']==partial_id:
+                response['payload']['claims'][0]['faithfulness']['evidence']=[
+                    {'ref':'unknown','start':0,'end':1,'text':'x'}]
+            return response
+    parent=execute_frozen(spec,tmp_path/'parent',provider=First())
+    assert [env['assessments'][0]['status'] for env in parent['envelopes']]==['PARTIAL','UNAVAILABLE']
+    calls=[]
+    class Retry(FixtureProvider):
+        def __call__(self,request):
+            calls.append((request['task'],request['answer_id']))
+            return super().__call__(request)
+    child=retry_evaluation(spec,parent,tmp_path/'child',stages=['assessment'],
+                           unavailable_only=True,provider=Retry())
+    assert calls==[('assess_claims',unavailable_id)]
+    assert child['envelopes'][0]['assessments']==parent['envelopes'][0]['assessments']
+    assert child['envelopes'][1]['assessments'][0]['status']=='AVAILABLE'
+
+
+def test_rubric_retry_ignores_conflicting_unselected_partial_assessments(tmp_path):
+    spec = frozen_fixture()
+    target = spec['rows'][0]['answer_id']
+
+    class First(FixtureProvider):
+        def __call__(self, request):
+            if request['task'] == 'rubric' and request['answer_id'] == target:
+                raise ValueError('rubric failed')
+            response = super().__call__(request)
+            if request['task'] == 'assess_claims' and request['answer_id'] == target:
+                response['payload']['claims'][0]['faithfulness']['evidence'] = [
+                    {'ref': 'unknown', 'start': 0, 'end': 1, 'text': 'x'}]
+            return response
+
+    parent = execute_frozen(spec, tmp_path / 'parent', provider=First())
+    receipt = next(r for r in parent['stages'] if r.get('task') == 'assess_claims'
+                   and r.get('answer_id') == target)
+    duplicate = deepcopy(receipt)
+    duplicate['output']['retry_conflicts'] = ['later_generation']
+    parent['stages'].append(duplicate)
+    seal_complete_results(parent)
+    child = retry_evaluation(spec, parent, tmp_path / 'child', stages=['rubric'],
+                             answer_ids=[target], provider=FixtureProvider())
+    assert child['envelopes'][0]['rubric'][0]['status'] == 'AVAILABLE'
+    assert child['envelopes'][0]['assessments'] == parent['envelopes'][0]['assessments']
 
 
 def test_import_partial_preserves_source_and_revalidates_before_merge(tmp_path):

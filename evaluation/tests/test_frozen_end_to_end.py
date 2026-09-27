@@ -66,3 +66,15 @@ def test_frozen_pipeline_to_current_sheets_and_report(tmp_path):
     assert all(e['rubric'][0]['status']=='AVAILABLE' for e in result['envelopes'])
     assert all(e['assessments'][0]['status']=='AVAILABLE' for e in result['envelopes'])
     assert all(e['relevancy']['status']=='AVAILABLE' for e in result['envelopes'])
+
+
+def test_deferred_relevancy_keeps_judge_cells_and_frozen_input(tmp_path):
+    spec=build_plan([IDENTITY],[IDENTITY],IDENTITY,case_ids=['TC-35'],relevancy_generator=IDENTITY)
+    spec['rows']=[freeze_answer(r,{'text':'這是離線合成回答。'},[],generation_id='deferred') for r in spec['rows']]
+    result=execute_frozen(spec,tmp_path,provider=FixtureProvider(),max_workers=2,
+                          provider_max_inflight=2, defer_relevancy=True)
+    validate_complete_results(result)
+    assert all(e['rubric'][0]['status']=='AVAILABLE' and e['assessments'][0]['status']=='AVAILABLE'
+               and e['relevancy']['status']=='UNAVAILABLE' for e in result['envelopes'])
+    assert result['provenance'][-1]['operation']=='defer_relevancy_due_to_provider_quota'
+    assert json.loads((tmp_path/'frozen-input.json').read_text())['plan']['branches']['relevancy'] is True

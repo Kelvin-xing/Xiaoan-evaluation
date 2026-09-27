@@ -90,6 +90,22 @@ def normalize_quote_offsets(payload, request):
     for i,requirement in enumerate(result.get('requirements',[])):
         for n,quote in enumerate(requirement.get('answer_spans',[])):
             repair(quote,answer,f'/requirements/{i}/answer_spans/{n}')
+    definitions={c['id']:c for c in request.get('inventory',{}).get('claims',[])}
+    for i,claim in enumerate(result.get('claims',[])):
+        kind=definitions.get(claim.get('id'),{}).get('kind')
+        for axis in ('faithfulness','correctness'):
+            label=claim.get(axis)
+            if not isinstance(label,dict):continue
+            if kind=='SUPPORTIVE' or axis=='correctness' and kind in ('RECOMMENDATION','ACTION'):
+                verdict='NOT_APPLICABLE'
+            elif axis=='faithfulness' and request.get('context_capture')!='EXPOSED' or axis=='correctness' and not request.get('reference_facts'):
+                verdict='UNKNOWN'
+            else:
+                continue
+            if label.get('verdict')!=verdict or label.get('evidence')!=[]:
+                repairs.append({'path':f'/claims/{i}/{axis}','original':deepcopy(label),
+                                'rule':'frozen-applicability/v3','claim_kind':kind})
+                label.update(verdict=verdict,evidence=[],reason='依凍結 claim 類型與可用證據範圍確定。')
     definitions={r['id']:r for r in request.get('requirements',[])}
     for i,requirement in enumerate(result.get('requirements',[])):
         definition=definitions.get(requirement.get('id'),{})

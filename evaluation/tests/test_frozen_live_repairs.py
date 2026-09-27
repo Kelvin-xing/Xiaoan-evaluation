@@ -31,6 +31,39 @@ def test_ambiguous_or_missing_quote_never_repaired():
         assert result==payload and repairs==[]
 
 
+def test_assessment_request_names_exact_evidence_domains_and_version():
+    from xiaoan_eval_core.contracts import assessment_request
+    row={'answer_id':'a','answer':'answer','question':'question','history':[],
+         'context_capture':'EXPOSED','context':[{'ref':'ctx:1','content':'quote','layer':'SOURCE'}],
+         'reference_facts':[{'ref':'fact:1','content':'fact','layer':'SOURCE'}],
+         'truth_status':'approved','truth_version':'v1','requirements':[],'observations':{}}
+    inventory={'claims':[],'inventory_id':'i'}
+    judge={'id':'fixture'}
+    request=assessment_request(row,inventory,judge)
+    assert request['validator_version']=='frozen/v3'
+    assert 'context refs: ["ctx:1"]' in request['instructions']
+    assert 'reference_facts refs: ["fact:1"]' in request['instructions']
+
+
+def test_provider_repairs_only_deterministic_applicability_and_absence():
+    from copy import deepcopy
+    payload={'claims':[
+        {'id':'s','faithfulness':{'verdict':'ENTAILED','evidence':[{'ref':'answer'}],'reason':'guess'},
+         'correctness':{'verdict':'ENTAILED','evidence':[{'ref':'answer'}],'reason':'guess'}},
+        {'id':'f','faithfulness':{'verdict':'ENTAILED','evidence':[],'reason':'guess'},
+         'correctness':{'verdict':'ENTAILED','evidence':[],'reason':'guess'}}]}
+    request={'inventory':{'claims':[{'id':'s','kind':'SUPPORTIVE'},{'id':'f','kind':'FACTUAL'}]},
+             'context_capture':'UNAVAILABLE','reference_facts':[]}
+    frozen=deepcopy(payload)
+    result,repairs=normalize_quote_offsets(payload,request)
+    assert payload==frozen
+    assert len(repairs)==4
+    assert result['claims'][0]['faithfulness']['verdict']=='NOT_APPLICABLE'
+    assert result['claims'][0]['correctness']['evidence']==[]
+    assert result['claims'][1]['faithfulness']['verdict']=='UNKNOWN'
+    assert result['claims'][1]['correctness']['verdict']=='UNKNOWN'
+
+
 def test_live_provider_binds_its_own_response_but_preserves_raw(monkeypatch,tmp_path):
     import json
     from xiaoan_eval.frozen_provider import ConfiguredProvider

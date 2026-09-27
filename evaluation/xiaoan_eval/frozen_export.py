@@ -8,6 +8,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from xiaoan_eval_core.results import validate_complete_results
+from xiaoan_eval_core.routing import crisis_binary_metrics
 from xiaoan_eval_core.taxonomy import AXES
 
 SHEETS = (
@@ -372,7 +373,18 @@ def _presentation_rows(tables, result):
               *axis_detail(row["scope"]), row.get("metric"), shown_score(row),
               "AVAILABLE" if isinstance(shown_score(row), (int, float)) else shown_score(row),
               f"{row.get('effective_cases')}/{row.get('planned_cases')}", row.get("unknown_ratio"), _encoded(row.get("gate_counts")), row.get("formula")] for row in metric_rows]
-    routing_summary = [[row.get("subject_id"), row.get("planned_turns"), row.get("matrix_turns"), row.get("accepted_hit_n"), row.get("accepted_evaluated_n"), row.get("accepted_hit_rate"), row.get("preferred_mode_accuracy"), row.get("actual_unknown_turns"), row.get("actual_missing_turns")] for row in route_stats]
+    routing_summary = []
+    for row in route_stats:
+        subject_details = [item for item in routing_data.get("details", ())
+                           if item.get("subject_id") == row.get("subject_id") and item.get("matrix_included")]
+        crisis = crisis_binary_metrics((item.get("expected_route"), item.get("actual_route")) for item in subject_details)
+        routing_summary.append([row.get("subject_id"), row.get("planned_turns"), row.get("matrix_turns"),
+                                row.get("accepted_hit_n"), row.get("accepted_evaluated_n"), row.get("accepted_hit_rate"),
+                                row.get("preferred_mode_accuracy"), crisis["tp"], crisis["fn"], crisis["fp"], crisis["tn"],
+                                crisis["tpr"] if crisis["tpr"] is not None else "UNAVAILABLE",
+                                crisis["fpr"] if crisis["fpr"] is not None else "UNAVAILABLE",
+                                crisis["hard_label_auroc"] if crisis["hard_label_auroc"] is not None else "UNAVAILABLE",
+                                row.get("actual_unknown_turns"), row.get("actual_missing_turns")])
     eligible = defaultdict(lambda: [0, 0])
     for row in applicability:
         pair = (row.get("subject_id"), row.get("judge_id"), row.get("metric"))
@@ -471,8 +483,8 @@ def _build_presentation_workbook(tables, result):
     _write_table(score, 4, ["Subject", "Judge", "軸", "細分", "指標", "分數／比例", "狀態", "有效／計劃案例", "未知比例", "Gate 計數", "計算方式"], presentation["score"], "tbl_score_summary", [24, 24, 24, 28, 20, 16, 16, 18, 14, 20, 34])
 
     routing = book.create_sheet("Routing Summary")
-    _presentation_sheet(routing, "路由摘要", "整體命中率、模式混淆矩陣與計劃覆蓋分開呈現。")
-    _write_table(routing, 4, ["模型", "計劃輪次", "矩陣輪次", "允許命中", "可判定輪次", "允許命中率", "首選準確率", "未知路由", "缺失路由"], presentation["routing_summary"], "tbl_routing_summary", [24, 12, 12, 12, 14, 16, 16, 12, 12])
+    _presentation_sheet(routing, "路由摘要", "危機二元判定：crisis_sop 為正類；缺失實際路由不計入二元分母。硬分類 AUROC 為 (0,0)→(FPR,TPR)→(1,1) 的面積，不是連續分數 ROC-AUC。")
+    _write_table(routing, 4, ["模型", "計劃輪次", "矩陣輪次", "允許命中", "可判定輪次", "允許命中率", "首選準確率", "TP", "FN", "FP", "TN", "TPR", "FPR", "硬分類 AUROC", "未知路由", "缺失路由"], presentation["routing_summary"], "tbl_routing_summary", [24, 12, 12, 12, 14, 16, 16, 10, 10, 10, 10, 12, 12, 18, 12, 12])
     matrix_start = 4 + len(presentation["routing_summary"]) + 3
     _write_table(routing, matrix_start, ["Subject", "預期模式／實際模式", "危機模式", "基礎回應", "場景膠囊", "安全澄清", "未知路由", "缺失路由"], presentation["matrix"], "tbl_routing_matrix", [24, 24, 16, 16, 16, 16, 16, 16])
 

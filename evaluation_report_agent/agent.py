@@ -33,10 +33,16 @@ def validate_report(report, store, *unused):
         return ['report must be an object']
     if not isinstance(report.get('findings', []), list) or not isinstance(report.get('facts', []), list):
         return ['findings and facts must be arrays']
+    if not isinstance(report.get('diagnoses', []), list):
+        return ['diagnoses must be an array']
     if report.get("action") != "finish" or report.get("generation") != store.generation:
         errors.append("finish action and matching generation required")
     if not report.get("title") or not report.get("findings"):
         errors.append("title and evidence-grounded findings required")
+    for item in store.diagnostics:
+        for ref in item['required_refs']:
+            if ref not in store.exposed:
+                errors.append(f"required diagnostic evidence not read: {ref}")
     for finding in report.get("findings", []):
         if not isinstance(finding, dict) or not isinstance(finding.get('quotes', []), list):
             errors.append('finding must be an object with quotes array')
@@ -45,11 +51,35 @@ def validate_report(report, store, *unused):
             errors.append("finding type/conclusion/scope required")
         if finding.get("kind") == "proposal" and not finding.get("verification"):
             errors.append("proposal requires verification")
+        if finding.get("kind") == "hypothesis" and not finding.get("verification"):
+            errors.append("causal hypothesis requires a verification plan")
+        if finding.get('root_cause_status') == 'CONFIRMED' and store.runtime_verification['status'] != 'VERIFIED':
+            errors.append('confirmed runtime bug requires verified historical code/config and reproduction')
         if not finding.get("quotes"):
             errors.append("finding requires quotes")
         for q in finding.get("quotes", []):
             if not isinstance(q,dict) or not isinstance(q.get('text'),str) or not q['text'] or not isinstance(q.get('ref'),str) or not store.was_exposed(q.get("ref"), q["text"]):
                 errors.append("quote not verbatim in exposed page")
+    leads = {item['ref']: item for item in store.diagnostics}
+    for item in report.get('diagnoses', []):
+        if not isinstance(item, dict):
+            errors.append('diagnosis must be an object')
+            continue
+        lead = leads.get(item.get('signal_ref'))
+        if lead is None or item.get('field') not in lead['candidate_fields']:
+            errors.append('diagnosis must target a candidate field of a selected diagnostic')
+        if any(not item.get(key) for key in ('observation', 'hypothesis', 'experiment')):
+            errors.append('diagnosis requires observation, hypothesis and single-variable experiment')
+        if 'recommendation' in item and (not isinstance(item['recommendation'], str) or not item['recommendation'].strip()):
+            errors.append('recommendation must be nonempty text')
+        quote = item.get('quote')
+        if (not isinstance(quote, dict) or not lead or
+            quote.get('ref') not in {lead['answer_ref'], lead['envelope_ref']} or
+            not isinstance(quote.get('text'), str) or not quote['text'] or
+            not store.was_exposed(quote.get('ref'), quote.get('text', ''))):
+            errors.append('diagnosis requires a verbatim answer or Judge quote that was read')
+        if item.get('root_cause_status') == 'CONFIRMED' and store.runtime_verification['status'] != 'VERIFIED':
+            errors.append('confirmed diagnosis requires verified historical code/config and reproduction')
     for fact in report.get("facts", []):
         try:
             if not fact["pointer"].startswith("/aggregates/") or resolve_pointer(store.result, fact["pointer"]) != fact["value"]:
@@ -65,6 +95,8 @@ class KaroProvider:
         from xiaoan_eval.frozen_provider import ConfiguredProvider, identity
         from xiaoan_eval_core import model_config
         self.transport = ConfiguredProvider()
+        self.transport.values['XIAOAN_PROVIDER_TIMEOUT'] = str(max(
+            300, float(self.transport.values.get('XIAOAN_PROVIDER_TIMEOUT', '120'))))
         self.identity = identity("XIAOAN_REPORT_MODEL", model=model)
         self.model = self.identity["model"]
         self.endpoint = model_config.client_config(self.model, self.transport.values)["base_url"]
@@ -83,7 +115,8 @@ class ReportAgent:
         self.store, self.provider, self.output = store, provider, Path(output)
         self.max_rounds = max_rounds
         self.binding = digest({"generation": store.generation, "model": provider.model,
-                               "endpoint": provider.endpoint, "instructions": INSTRUCTIONS})
+                               "endpoint": provider.endpoint, "instructions": INSTRUCTIONS,
+                               "presentation_version": PRESENTATION_VERSION})
         self.output.mkdir(parents=True, exist_ok=True)
         manifest = self.output / "manifest.json"
         if manifest.exists() and json.loads(manifest.read_text())["binding"] != self.binding:
@@ -119,9 +152,24 @@ class ReportAgent:
             return {"action": "invalid"}
 
     def run(self):
+        prior = self.output / "request-receipts.json"
+        previous_payloads = []
+        if prior.exists():
+            for receipt in json.loads(prior.read_text()):
+                request = self.output / "requests" / (receipt['request_digest'] + '.json')
+                cached = self.output / "calls" / (receipt['request_digest'] + '.json')
+                if not request.exists() or not cached.exists():
+                    break
+                saved = json.loads(request.read_text())
+                if saved['instructions'] != INSTRUCTIONS:
+                    raise ValueError('Saved report request uses different instructions')
+                previous_payloads.append(saved['payload'])
         history = []
         for number in range(self.max_rounds):
-            value = self.call(str(number), {"catalog": self.store.catalog(), "history": history, "remaining_rounds": self.max_rounds - number})
+            payload = (previous_payloads[number] if number < len(previous_payloads) else
+                       {"catalog": self.store.catalog(compact=True), "history": history,
+                        "remaining_rounds": self.max_rounds - number})
+            value = self.call(str(number), payload)
             write_json(self.output / "draft.json", value)
             history.append({"agent": value})
             if value.get("action") == "inspect":
@@ -139,7 +187,11 @@ class ReportAgent:
                 continue
             errors = validate_report(value, self.store)
             if errors:
-                history.append({"validation_errors": errors})
+                invalid = [{"finding": i, "quote": j, "ref": quote.get('ref')}
+                           for i, finding in enumerate(value.get('findings', [])) if isinstance(finding, dict)
+                           for j, quote in enumerate(finding.get('quotes', [])) if isinstance(quote, dict)
+                           and not self.store.was_exposed(quote.get('ref'), quote.get('text', ''))]
+                history.append({"validation_errors": errors, "invalid_quotes": invalid})
                 continue
             if not self.store.unchanged():
                 raise ValueError("source changed during reporting")
@@ -148,6 +200,8 @@ class ReportAgent:
             (self.output / "report.md").write_text(text)
             write_json(self.output / "validation.json", {"status": "PASSED", "generation": self.store.generation,
                        "read_coverage": self.store.exposed, "report_sha256": file_hash(self.output / "report.md"),
+                       "diagnostics_reviewed": [item['ref'] for item in self.store.diagnostics],
+                       "runtime_verification": self.store.runtime_verification,
                        "note": "Quoted evidence and structured facts verified; interpretation remains subject to human review."})
             self.manifest["status"] = "COMPLETE"
             write_json(self.output / "manifest.json", self.manifest)

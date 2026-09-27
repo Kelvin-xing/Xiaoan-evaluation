@@ -44,6 +44,17 @@ def test_http_status_retry_records_only_status_and_bounded_retry_after(tmp_path,
     journal=''.join(p.read_text() for p in (tmp_path/'rate').glob('*.events.jsonl'))
     assert 'secret' not in journal and 'sensitive' not in journal
 
+    unlabelled=ResponseStore(tmp_path/'unlabelled',max_attempts=2)
+    calls.clear();waits.clear()
+    def short_limit(_):
+        calls.append(True)
+        if len(calls)==1:
+            response=httpx.Response(429,request=request)
+            raise httpx.HTTPStatusError('limited',request=request,response=response)
+        return {'ok':True}
+    assert unlabelled.call({'task':'test'},short_limit,lambda value,_:value)=={'ok':True}
+    assert waits==[5]
+
     rejected=ResponseStore(tmp_path/'region',max_attempts=3)
     calls.clear()
     def unsupported(_):
@@ -147,8 +158,9 @@ def test_partial_retry_preserves_valid_axis_and_records_conflict(tmp_path):
             value['claims'][0]['correctness']['reason']='new wording changes saved judgement'
         return value
     second=evaluate(spec(),conflicting,checkpoint_dir=tmp_path)
-    assert second['cells'][0]['status']=='PARTIAL'
+    assert second['cells'][0]['status']=='AVAILABLE'
     assert second['cells'][0]['assessment']['retry_conflicts']
+    assert second['cells'][0]['assessment']['conflict_resolution']=='PRESERVED_PRIOR_NON_SCORING_FIELDS'
     assert second['cells'][0]['assessment']['claims'][0]['correctness']==first['cells'][0]['assessment']['claims'][0]['correctness']
     third=evaluate(spec(),provider,checkpoint_dir=tmp_path)
     assert third['cells'][0]['status']=='AVAILABLE'

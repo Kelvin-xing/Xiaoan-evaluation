@@ -35,7 +35,7 @@ def load_plugin(value):
     return getattr(importlib.import_module(module), name)
 
 
-def execute_frozen(spec, output, *, execute=False, provider=None, report=False, max_workers=None, checkpoint_dir=None, evaluator_config=None):
+def execute_frozen(spec, output, *, execute=False, provider=None, report=False, max_workers=None, checkpoint_dir=None, evaluator_config=None, provider_max_inflight=None, provider_requests_per_second=None, defer_relevancy=False):
     from xiaoan_eval_core.orchestration import run_orchestration
     from .frozen_export import export_results_workbook
     from .frozen_provider import ConfiguredProvider
@@ -60,9 +60,28 @@ def execute_frozen(spec, output, *, execute=False, provider=None, report=False, 
         if spec.get('provider_options',{}) != transport_options(call.values):
             raise ValueError('Provider options differ from frozen evaluation input')
     try:
-        result = run_orchestration(spec, faithfulness_provider=call,rubric_provider=call,
+        store = None
+        if provider_max_inflight is not None or provider_requests_per_second is not None:
+            from xiaoan_eval_core.runtime import ResponseStore
+            from xiaoan_eval_core.configuration import workflow
+            settings = workflow()
+            store = ResponseStore(checkpoint_dir or out/'checkpoint', max_workers=max_workers or settings['max_workers'],
+                                  provider_max_inflight=provider_max_inflight or settings['provider_max_inflight'],
+                                  max_attempts=spec.get('max_attempts', settings['max_attempts']),
+                                  provider_options=spec.get('provider_options'),
+                                  provider_requests_per_second=(provider_requests_per_second if provider_requests_per_second is not None else
+                                      spec.get('provider_requests_per_second', settings.get('provider_requests_per_second', 0))))
+        execution_spec = spec
+        if defer_relevancy:
+            from copy import deepcopy
+            execution_spec = deepcopy(spec)
+            execution_spec['branches'] = {**spec['plan']['branches'], 'relevancy':False}
+            prior = spec.get('provenance', [])
+            execution_spec['provenance'] = [*(prior if isinstance(prior, list) else [prior]),
+                                            {'operation':'defer_relevancy_due_to_provider_quota'}]
+        result = run_orchestration(execution_spec, faithfulness_provider=call,rubric_provider=call,
                   generation_provider=call, embedding_provider=getattr(call,'embeddings',None),
-                  checkpoint_dir=checkpoint_dir or out/'checkpoint',max_workers=max_workers)
+                  checkpoint_dir=checkpoint_dir or out/'checkpoint',max_workers=max_workers,store=store)
     finally:
         if provider is None and isinstance(call,ConfiguredProvider):
             call.close()
@@ -95,10 +114,20 @@ def generate_report(results, output, *, execute=False, provider=None):
 
 
 def register_generation(commands):
+    balanced=commands.add_parser('assemble-balanced',help='從已封存 subject 結果組裝八模型四評委的完整共同案例')
+    balanced.add_argument('--sources',nargs='+',required=True)
+    balanced.add_argument('--output',required=True)
+    balanced.add_argument('--allow-missing-relevancy',action='store_true')
+    balanced.add_argument('--rubric-comparable',action='store_true',help='以四評委 rubric 齊全選案例；其他指標各取 32 格的共同可用案例')
+    balanced.add_argument('--answer-balanced',action='store_true',help='以八模型的完整回答及四評委格位選案例，保留不可用評測原狀')
     retry=commands.add_parser('retry-evaluation',help='以封存回答選擇性重跑不可用的評估格位')
     retry.add_argument('--from-results',required=True)
-    retry.add_argument('--output',required=True)
+    retry.add_argument('--output',help='預設在 --from-results 所在目錄原位續跑')
     retry.add_argument('--stages',nargs='+',choices=('extraction','rubric','assessment','relevancy'))
+    retry.add_argument('--unavailable-only',action='store_true',
+                       help='只選 UNAVAILABLE 評測格位，保留 PARTIAL 的有效維度')
+    retry.add_argument('--reconcile-conflicts-only',action='store_true',
+                       help='離線結清非評分差異，標記實質衝突待裁決；不呼叫供應商')
     retry.add_argument('--answer-ids',nargs='+')
     retry.add_argument('--judges',nargs='+')
     retry.add_argument('--add-judges',nargs='+',help='向原凍結回答計畫追加已配置 Judge，不改寫回答 manifest')
@@ -112,6 +141,8 @@ def register_generation(commands):
     retry.add_argument('--max-workers',type=int,default=2)
     retry.add_argument('--provider-max-inflight',type=int,
                        help='每個供應商的執行期並行上限，不修改凍結評測設定或檢查點鍵')
+    retry.add_argument('--provider-requests-per-second',type=float,
+                       help='每個供應商的執行期請求速率上限，不修改凍結評測設定或檢查點鍵')
     lanes=commands.add_parser('retry-subject-lanes',help='只重生選中的失敗 subject/case lane')
     lanes.add_argument('--from-results',required=True)
     lanes.add_argument('--lanes',nargs='+',required=True,metavar='SUBJECT:CASE')
@@ -137,6 +168,11 @@ def register_generation(commands):
         parser.add_argument('--execute',action='store_true',help='Explicitly call configured providers')
         parser.add_argument('--report',action='store_true')
         parser.add_argument('--max-workers',type=int,default=2)
+        parser.add_argument('--provider-max-inflight',type=int,
+                            help='執行期每供應商並發上限；不修改凍結計畫與檢查點鍵')
+        parser.add_argument('--provider-requests-per-second',type=float,
+                            help='執行期每供應商請求速率上限；不修改凍結計畫與檢查點鍵')
+        parser.add_argument('--defer-relevancy',action='store_true',help='保留回答及其他 Judge 結果，稍後單獨補 relevancy')
     report=commands.add_parser('report',help='从完整 results.json 生成报告')
     report.add_argument('results');report.add_argument('--output',required=True);report.add_argument('--execute',action='store_true')
     review=commands.add_parser('import-human-review',help='導入 results.xlsx 的 Human Review，產生新 generation')
@@ -156,6 +192,17 @@ def register_generation(commands):
 
 
 def dispatch(args):
+    if args.command=='assemble-balanced':
+        from .frozen_balanced import assemble_balanced
+        if args.answer_balanced and args.rubric_comparable:
+            raise ValueError('Choose one assembly mode')
+        sources=[Path(path) for path in args.sources]
+        result=assemble_balanced([json.loads(path.read_text()) for path in sources], sources,
+                                 args.output,require_relevancy=not args.allow_missing_relevancy,
+                                 require_assessment=not (args.rubric_comparable or args.answer_balanced),
+                                 require_rubric=not args.answer_balanced)
+        print(json.dumps({'case_ids':result['plan']['case_ids'], 'turns_per_subject_judge':len(result['answers'])//8},ensure_ascii=False))
+        return 0
     if args.command=='merge-subject-results':
         from .frozen_merge import merge_subject_results
         merge_subject_results(json.loads(Path(args.base).read_text()), json.loads(Path(args.add).read_text()),
@@ -166,14 +213,20 @@ def dispatch(args):
         from xiaoan_eval_core.results import validate_complete_results
         source=Path(args.from_results)
         parent=validate_complete_results(json.loads(source.read_text()))
-        out=Path(args.output)
-        if out.resolve()==source.parent.resolve():
-            raise ValueError('Retry must use a new output directory')
+        out=Path(args.output) if args.output else source.parent
+        if args.command=='retry-evaluation' and (out/'results.json').exists() and out.resolve()!=source.parent.resolve():
+            raise ValueError('An existing retry result may only be replaced from its own directory')
+        if args.command=='retry-subject-lanes' and out.resolve()==source.parent.resolve():
+            raise ValueError('Subject lane retry must use a new output directory')
         if args.command=='retry-evaluation':
-            if args.provider_max_inflight is not None and args.provider_max_inflight < 1:
-                raise ValueError('--provider-max-inflight must be positive')
-            spec=json.loads((source.parent/'frozen-input.json').read_text())
-            validate_frozen_spec(spec)
+            if (args.provider_max_inflight is not None and args.provider_max_inflight < 1 or
+                    args.provider_requests_per_second is not None and args.provider_requests_per_second <= 0):
+                raise ValueError('Runtime provider concurrency and rate must be positive')
+            from .frozen_retry import assembled_retry_spec, validate_retry_spec
+            frozen_input = source.parent/'frozen-input.json'
+            spec=(json.loads(frozen_input.read_text()) if frozen_input.is_file()
+                  else assembled_retry_spec(parent))
+            validate_retry_spec(spec,parent)
             if args.add_judges:
                 from .frozen_retry import extend_judges
                 from .frozen_provider import identity
@@ -183,12 +236,19 @@ def dispatch(args):
                 for folder in args.reuse_checkpoints:
                     if not (folder/'checkpoint').is_dir():
                         raise ValueError(f'Checkpoint directory missing: {folder}')
-            outcome=retry_evaluation(spec,parent,out,stages=args.stages,answer_ids=args.answer_ids,
-                             judge_ids=args.judges,execute=True,max_workers=args.max_workers,
-                             provider_max_inflight=args.provider_max_inflight,
-                             new_evaluator_cohort=args.new_evaluator_cohort,
-                             adopt_current_runtime=args.adopt_current_runtime,dry_run=not args.execute,
-                             checkpoint_sources=args.reuse_checkpoints if args.execute else None)
+            from contextlib import nullcontext
+            from .frozen_retry import locked_retry_output
+            lock = locked_retry_output(out) if args.execute and out.resolve()==source.parent.resolve() else nullcontext()
+            with lock:
+                outcome=retry_evaluation(spec,parent,out,stages=args.stages,answer_ids=args.answer_ids,
+                                 judge_ids=args.judges,execute=True,max_workers=args.max_workers,
+                                 provider_max_inflight=args.provider_max_inflight,
+                                 provider_requests_per_second=args.provider_requests_per_second,
+                                 new_evaluator_cohort=args.new_evaluator_cohort,
+                                 adopt_current_runtime=args.adopt_current_runtime,dry_run=not args.execute,
+                                 checkpoint_sources=args.reuse_checkpoints if args.execute else None,
+                                 unavailable_only=args.unavailable_only,
+                                 reconcile_only=args.reconcile_conflicts_only)
             if not args.execute: print(json.dumps(outcome,ensure_ascii=False,indent=2))
             elif (source.parent/'plan.json').is_file():
                 write_json(out/'plan.json',json.loads((source.parent/'plan.json').read_text()))
@@ -269,6 +329,9 @@ def dispatch(args):
         export_results_workbook(value,Path(args.output)/'results.xlsx')
         return 0
     if args.command in ('run','matrix'):
+        if (args.provider_max_inflight is not None and args.provider_max_inflight < 1 or
+                args.provider_requests_per_second is not None and args.provider_requests_per_second <= 0):
+            raise ValueError('Runtime provider concurrency and rate must be positive')
         from .frozen_provider import identity, ConfiguredProvider, transport_options
         from .frozen_generation import generate, LocalChatflowSubject, HttpChatflowSubject, DirectSubject
         from xiaoan_eval_core import model_config
@@ -297,7 +360,10 @@ def dispatch(args):
                 subject=HttpChatflowSubject(args.base_url)
             else: subject=DirectSubject(call)
             frozen=generate(spec,subject,checkpoint_dir=out/'subject-checkpoint',max_workers=args.max_workers)
-            execute_frozen(frozen,out,execute=True,provider=call,report=args.report,max_workers=args.max_workers)
+            execute_frozen(frozen,out,execute=True,provider=call,report=args.report,max_workers=args.max_workers,
+                           provider_max_inflight=args.provider_max_inflight,
+                           provider_requests_per_second=args.provider_requests_per_second,
+                           defer_relevancy=args.defer_relevancy)
         finally:
             call.close()
     elif args.command=='report':

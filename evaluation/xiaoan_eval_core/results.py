@@ -95,7 +95,7 @@ def aggregate_complete_results(result):
             quality_ok = valid and all(c.get("status") == "AVAILABLE" and s.get("weighted_total") is not None for c, s in zip(rubric_cells, scored))
             scores = {}
             if quality_ok:
-                dims = set().union(*(s.get("scores", {}).keys() for s in scored))
+                dims = sorted(set().union(*(s.get("scores", {}).keys() for s in scored)))
                 scores = {d: fmean(s["scores"][d] for s in scored if d in s.get("scores", {})) for d in dims}
                 weights = scored[0].get("final_weights", {})
                 quality = sum(scores[d] * weights[d] for d in scores) if weights and all(d in weights for d in scores) else fmean(s["weighted_total"] for s in scored)

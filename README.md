@@ -25,7 +25,9 @@
 
 新流程的程式位於 XiaoAn monorepo：`evaluation/` 是 canonical evaluator（`xiaoan_eval_core/` 共用核心、`xiaoan_eval/` CLI、`evaluator-config/` 生效配置、root `evaluation_report_agent/` 報告），`evaluation_multimodels/` 只保留 matrix subject 生成、案例、approved oracles 與 runs，並以薄 bridge 指向同一核心。
 
-**本 standalone repo 已同步 2026-09-26 monorepo 快照**：`evaluation/`（單模型）、`evaluation_multimodels/`（多模型 matrix）、`evaluation_report_agent/`、`tech_research/baseline_minimal32/` 腳本，以及 `docs/research/` 的評估研究文件。本次同步不含本地 `runs/` 產物、`.env` 與原始 xlsx 資料；repo 中既有的已發布 runs／outputs 保持不變。舊版文件內容可在 git 歷史（commit `557d695` 及之前）查閱。以下命令以 monorepo root 為工作目錄。
+本 standalone repo 同步 `evaluation/`（canonical evaluator）、`evaluation_multimodels/`（多模型 matrix）與 `evaluation_report_agent/`（報告和逐評委研究）的目前程式與測試；`tech_research/baseline_minimal32/` 及 `docs/research/` 保留背景資料。一般本地 `runs/`、`.env` 與原始傳輸紀錄不公開；明確發布的凍結結果例外列在下方，其他既有已發布 runs／outputs 保持不變。以下命令以 repo root 為工作目錄。
+
+**已發布的 Minimal33 八模型四評委結果**：[完整研究報告與可還原結果](evaluation_multimodels/runs/minimal33-eight-four-assessment-retry-final-20260927/README.md)。該目錄包含 33 案、100 輪、3,200 個計劃評委單位的逐單位研究（其中 3,198 可分析、2 個明確標記不可用）、原評分報告、Excel 及壓縮後的凍結 JSON。結果是指定範圍的公開交付，不改變其他本地 runs 的預設私有邊界。
 
 ## 目錄
 

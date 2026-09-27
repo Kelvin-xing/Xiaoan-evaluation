@@ -46,7 +46,7 @@ PREFLIGHT_ARTIFACTS = {
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    if args.command in {'run','matrix','report','cost','route-analysis','import-human-review','export-human-review','refresh-derived-results','merge-subject-results','frozen-calibration','retry-evaluation','retry-subject-lanes'}:
+    if args.command in {'run','matrix','report','cost','route-analysis','import-human-review','export-human-review','refresh-derived-results','merge-subject-results','assemble-balanced','frozen-calibration','retry-evaluation','retry-subject-lanes'}:
         from .frozen_cli import dispatch
         return dispatch(args)
     if args.command == "measure":
